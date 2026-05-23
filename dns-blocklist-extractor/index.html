@@ -11,6 +11,9 @@
     
     <!-- PDF.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
         :root {
@@ -1086,56 +1089,158 @@
                         Lista Branca
                         <span class="tab-badge" id="badgeWhitelistCount">0</span>
                     </button>
+                    <button class="tab-btn" id="tabCompareBtn" onclick="switchTab('compare')">
+                        Comparador de Domínios
+                    </button>
                 </div>
 
-                <div class="table-toolbar">
-                    <div class="search-container">
-                        <!-- Search Icon -->
-                        <svg class="search-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                        <input type="text" id="searchBar" class="search-input" placeholder="Pesquisar domínios...">
+                <!-- Bloco de Listagem Tradicional (Blocklist/Whitelist) -->
+                <div id="blocklistWhitelistContent" style="display: flex; flex-direction: column; flex: 1;">
+                    <div class="table-toolbar">
+                        <div class="search-container">
+                            <!-- Search Icon -->
+                            <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <input type="text" id="searchBar" class="search-input" placeholder="Pesquisar domínios...">
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn btn-secondary" id="btnAddDomain">
+                                <!-- Plus Icon -->
+                                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                Adicionar Manual
+                            </button>
+                            <button class="btn btn-danger" id="btnClearAll">
+                                <!-- Trash Icon -->
+                                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                Limpar Tudo
+                            </button>
+                            <button class="btn btn-secondary" id="btnExportWhitelist" style="display: none;">
+                                <!-- Download Icon -->
+                                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Exportar Lista Branca
+                            </button>
+                            <button class="btn" id="btnExport">
+                                <!-- Download Icon -->
+                                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Exportar TXT
+                            </button>
+                        </div>
                     </div>
-                    <div class="action-buttons">
-                        <button class="btn btn-secondary" id="btnAddDomain">
-                            <!-- Plus Icon -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                            Adicionar Manual
-                        </button>
-                        <button class="btn btn-danger" id="btnClearAll">
-                            <!-- Trash Icon -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                            Limpar Tudo
-                        </button>
-                        <button class="btn btn-secondary" id="btnExportWhitelist" style="display: none;">
-                            <!-- Download Icon -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            Exportar Lista Branca
-                        </button>
-                        <button class="btn" id="btnExport">
-                            <!-- Download Icon -->
-                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            Exportar TXT
-                        </button>
+
+                    <div class="table-wrapper">
+                        <table id="domainTable">
+                            <thead>
+                                <tr id="tableHeaderRow">
+                                    <th style="width: 50%;">Domínio</th>
+                                    <th style="width: 15%; text-align: center;">Ocorrências</th>
+                                    <th style="width: 20%;">Origem</th>
+                                    <th style="width: 15%; text-align: center;">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="domainTableBody">
+                                <!-- Empty State Rendered here by default -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-container" id="paginationContainer">
+                        <!-- Dynamic pagination controls will render here -->
                     </div>
                 </div>
 
-                <div class="table-wrapper">
-                    <table id="domainTable">
-                        <thead>
-                            <tr id="tableHeaderRow">
-                                <th style="width: 50%;">Domínio</th>
-                                <th style="width: 15%; text-align: center;">Ocorrências</th>
-                                <th style="width: 20%;">Origem</th>
-                                <th style="width: 15%; text-align: center;">Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="domainTableBody">
-                            <!-- Empty State Rendered here by default -->
-                        </tbody>
-                    </table>
-                </div>
+                <!-- Bloco do Comparador de Domínios -->
+                <div id="compareTabContent" style="display: none; flex-direction: column; gap: 1.5rem; flex: 1;">
+                    <!-- Área de Uploads do Comparador -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                        <!-- Card Upload A -->
+                        <div class="panel" style="background: rgba(255, 255, 255, 0.01); border: 1px dashed rgba(255, 255, 255, 0.1); padding: 1.25rem; border-radius: 0.75rem; text-align: center; margin-bottom: 0;">
+                            <div style="font-size: 0.8rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Lista A: Base Atual (Bloqueados)</div>
+                            <div class="dropzone" id="dropzoneA" style="padding: 1.5rem 1rem;">
+                                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" style="margin-bottom: 0.5rem; color: var(--primary);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                <div style="font-size: 0.8rem; font-weight: 500;" id="labelFileA">Carregar Lista A</div>
+                                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">TXT ou PDF</div>
+                                <input type="file" id="fileInputA" class="file-input" accept="application/pdf,text/plain">
+                            </div>
+                            <div id="statusFileA" style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--accent-cyan); display: none;"></div>
+                        </div>
+                        
+                        <!-- Card Upload B -->
+                        <div class="panel" style="background: rgba(255, 255, 255, 0.01); border: 1px dashed rgba(255, 255, 255, 0.1); padding: 1.25rem; border-radius: 0.75rem; text-align: center; margin-bottom: 0;">
+                            <div style="font-size: 0.8rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Lista B: Nova Lista a Comparar</div>
+                            <div class="dropzone" id="dropzoneB" style="padding: 1.5rem 1rem;">
+                                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" style="margin-bottom: 0.5rem; color: var(--accent-cyan);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                <div style="font-size: 0.8rem; font-weight: 500;" id="labelFileB">Carregar Lista B</div>
+                                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">TXT ou PDF</div>
+                                <input type="file" id="fileInputB" class="file-input" accept="application/pdf,text/plain">
+                            </div>
+                            <div id="statusFileB" style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--accent-cyan); display: none;"></div>
+                        </div>
+                    </div>
 
-                <div class="pagination-container" id="paginationContainer">
-                    <!-- Dynamic pagination controls will render here -->
+                    <!-- Estatísticas de Comparação -->
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
+                        <div class="stat-card" style="padding: 1rem; min-height: 80px;">
+                            <span class="stat-value" id="statCompareA" style="font-size: 1.4rem;">0</span>
+                            <span class="stat-label" style="font-size: 0.65rem;">Total Lista A</span>
+                        </div>
+                        <div class="stat-card" style="padding: 1rem; min-height: 80px;">
+                            <span class="stat-value" id="statCompareB" style="font-size: 1.4rem;">0</span>
+                            <span class="stat-label" style="font-size: 0.65rem;">Total Lista B</span>
+                        </div>
+                        <div class="stat-card" style="padding: 1rem; min-height: 80px;">
+                            <span class="stat-value" id="statCompareDuplicated" style="font-size: 1.4rem;">0</span>
+                            <span class="stat-label" style="font-size: 0.65rem;">Repetidos em A</span>
+                        </div>
+                        <div class="stat-card" style="padding: 1rem; min-height: 80px; background: linear-gradient(135deg, rgba(6, 182, 212, 0.1), rgba(99, 102, 241, 0.05)); border-color: rgba(6, 182, 212, 0.25);">
+                            <span class="stat-value" id="statCompareNew" style="font-size: 1.4rem; color: #a5b4fc;">0</span>
+                            <span class="stat-label" style="font-size: 0.65rem; color: #c7d2fe;">Domínios Inéditos</span>
+                        </div>
+                    </div>
+
+                    <!-- Toolbar Comparador -->
+                    <div class="table-toolbar" style="margin-bottom: 0;">
+                        <div class="search-container">
+                            <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <input type="text" id="compareSearchBar" class="search-input" placeholder="Pesquisar domínios inéditos...">
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn btn-danger" id="btnCompareClear" style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                Limpar Comparador
+                            </button>
+                            <button class="btn" id="btnCompareExport" style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Exportar Inéditos
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Tabela Comparador -->
+                    <div class="table-wrapper" style="max-height: 300px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width: 70%;">Domínio Inédito</th>
+                                    <th style="width: 30%; text-align: center;">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="compareTableBody">
+                                <!-- Estado vazio inicial -->
+                                <tr>
+                                    <td colspan="2">
+                                        <div class="empty-state" style="padding: 3rem 1rem;">
+                                            <svg class="empty-icon" viewBox="0 0 24 24" width="64" height="64" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                            <h3>Nenhum arquivo carregado</h3>
+                                            <p>Carregue os arquivos A e B acima para ver a comparação.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-container" id="comparePaginationContainer">
+                        <!-- Controls rendered dynamically -->
+                    </div>
                 </div>
             </div>
 
@@ -1167,6 +1272,13 @@
                 whitelistGov: true,
                 whitelistAnatel: true,
                 removeWww: false  // false = preserva www. por padrão
+            },
+            compare: {
+                fileA: { name: '', text: '', domains: new Set() },
+                fileB: { name: '', text: '', domains: new Set() },
+                results: [], // Array de domínios inéditos
+                searchQuery: '',
+                pagination: { currentPage: 1, pageSize: 100 }
             }
         };
 
@@ -1183,6 +1295,25 @@
         const btnExportWhitelist = document.getElementById('btnExportWhitelist');
         const btnClearAll = document.getElementById('btnClearAll');
         const btnAddDomain = document.getElementById('btnAddDomain');
+
+        // Elementos DOM Comparador
+        const dropzoneA = document.getElementById('dropzoneA');
+        const dropzoneB = document.getElementById('dropzoneB');
+        const fileInputA = document.getElementById('fileInputA');
+        const fileInputB = document.getElementById('fileInputB');
+        const labelFileA = document.getElementById('labelFileA');
+        const labelFileB = document.getElementById('labelFileB');
+        const statusFileA = document.getElementById('statusFileA');
+        const statusFileB = document.getElementById('statusFileB');
+        const statCompareA = document.getElementById('statCompareA');
+        const statCompareB = document.getElementById('statCompareB');
+        const statCompareDuplicated = document.getElementById('statCompareDuplicated');
+        const statCompareNew = document.getElementById('statCompareNew');
+        const compareSearchBar = document.getElementById('compareSearchBar');
+        const btnCompareClear = document.getElementById('btnCompareClear');
+        const btnCompareExport = document.getElementById('btnCompareExport');
+        const compareTableBody = document.getElementById('compareTableBody');
+        const comparePaginationContainer = document.getElementById('comparePaginationContainer');
 
         // Checkboxes de Regras
         const optOnlyDomains = document.getElementById('optOnlyDomains');
@@ -1292,6 +1423,57 @@
             btnExport.addEventListener('click', exportBlocklist);
             btnExportWhitelist.addEventListener('click', exportWhitelist);
             btnAddDomain.addEventListener('click', addManualDomainPrompt);
+
+            // Event Listeners do Comparador
+            if (dropzoneA && fileInputA && dropzoneB && fileInputB) {
+                dropzoneA.addEventListener('click', () => fileInputA.click());
+                fileInputA.addEventListener('change', (e) => handleCompareFileSelect(e, 'A'));
+                
+                dropzoneA.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropzoneA.classList.add('dragover');
+                });
+                dropzoneA.addEventListener('dragleave', () => dropzoneA.classList.remove('dragover'));
+                dropzoneA.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropzoneA.classList.remove('dragover');
+                    if (e.dataTransfer.files.length > 0) {
+                        processCompareFile(e.dataTransfer.files[0], 'A');
+                    }
+                });
+
+                dropzoneB.addEventListener('click', () => fileInputB.click());
+                fileInputB.addEventListener('change', (e) => handleCompareFileSelect(e, 'B'));
+                
+                dropzoneB.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropzoneB.classList.add('dragover');
+                });
+                dropzoneB.addEventListener('dragleave', () => dropzoneB.classList.remove('dragover'));
+                dropzoneB.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropzoneB.classList.remove('dragover');
+                    if (e.dataTransfer.files.length > 0) {
+                        processCompareFile(e.dataTransfer.files[0], 'B');
+                    }
+                });
+            }
+
+            if (compareSearchBar) {
+                compareSearchBar.addEventListener('input', (e) => {
+                    state.compare.searchQuery = e.target.value.toLowerCase().trim();
+                    state.compare.pagination.currentPage = 1;
+                    renderCompareTable();
+                });
+            }
+
+            if (btnCompareClear) {
+                btnCompareClear.addEventListener('click', clearCompare);
+            }
+
+            if (btnCompareExport) {
+                btnCompareExport.addEventListener('click', exportCompareResults);
+            }
         }
 
         // Obtém o motivo de inclusão na whitelist (ou null caso não esteja na whitelist)
@@ -1434,6 +1616,7 @@
                 const fileObj = {
                     name: file.name,
                     status: 'loading',
+                    statusMessage: 'Lendo...',
                     rawText: '' // Salvaremos o texto bruto para permitir re-processamento com regras diferentes
                 };
                 
@@ -1448,13 +1631,17 @@
                         let text = '';
                         if (isPdf) {
                             const typedArray = new Uint8Array(this.result);
-                            text = await extractTextFromPdf(typedArray, file.name);
+                            text = await extractTextFromPdf(typedArray, file.name, (progMsg) => {
+                                fileObj.statusMessage = progMsg;
+                                renderFileList();
+                            });
                         } else if (isTxt) {
                             text = this.result;
                         }
                         
                         fileObj.rawText = text;
                         fileObj.status = 'success';
+                        fileObj.statusMessage = '';
                         
                         // Executa extração de domínios sobre o texto
                         extractDomainsFromText(text, file.name);
@@ -1465,11 +1652,13 @@
                     } catch (err) {
                         console.error(err);
                         fileObj.status = 'error';
+                        fileObj.statusMessage = 'Erro de leitura';
                         renderFileList();
                     }
                 };
                 reader.onerror = function() {
                     fileObj.status = 'error';
+                    fileObj.statusMessage = 'Erro de leitura';
                     renderFileList();
                 };
 
@@ -1497,9 +1686,14 @@
                 item.style.gap = '0.5rem';
                 
                 let statusLabel = '';
-                if (file.status === 'loading') statusLabel = '<span class="file-status status-loading">Lendo...</span>';
-                else if (file.status === 'success') statusLabel = '<span class="file-status status-success">Sucesso</span>';
-                else statusLabel = '<span class="file-status status-error">Erro</span>';
+                if (file.status === 'loading') {
+                    const msg = file.statusMessage || 'Lendo...';
+                    statusLabel = `<span class="file-status status-loading" title="${msg}">${msg}</span>`;
+                } else if (file.status === 'success') {
+                    statusLabel = '<span class="file-status status-success">Sucesso</span>';
+                } else {
+                    statusLabel = '<span class="file-status status-error">Erro</span>';
+                }
 
                 const isFilePdf = file.name.toLowerCase().endsWith('.pdf');
                 const iconColor = isFilePdf ? 'var(--accent-rose)' : 'var(--accent-cyan)';
@@ -1533,21 +1727,63 @@
         // Remove um arquivo processado e recalcula os domínios
         window.removeFile = function(index) {
             state.files.splice(index, 1);
+            fileInput.value = ''; // Limpa o input de arquivo (corrige bug visual e de reupload)
             reprocessAllExtractedText();
         };
 
-        // Extrai texto bruto de um PDF usando PDF.js
-        async function extractTextFromPdf(typedArray, filename) {
+        // Extrai texto bruto de um PDF usando PDF.js e OCR com Tesseract.js para imagens
+        async function extractTextFromPdf(typedArray, filename, progressCallback) {
             const loadingTask = pdfjsLib.getDocument({ data: typedArray });
             const pdf = await loadingTask.promise;
             let fullText = '';
+            let ocrWorkerInstance = null;
             
             for (let i = 1; i <= pdf.numPages; i++) {
+                if (progressCallback) {
+                    progressCallback(`Pág ${i}/${pdf.numPages}...`);
+                }
+                
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
-                const pageText = textContent.items.map(item => item.str).join(' ');
+                let pageText = textContent.items.map(item => item.str).join(' ');
+                
+                // OCR Inteligente: Executa se o texto nativo for muito curto (indicativo de imagem escaneada)
+                if (pageText.trim().length < 15) {
+                    if (progressCallback) {
+                        progressCallback(`OCR Pág ${i}/${pdf.numPages}...`);
+                    }
+                    try {
+                        if (!ocrWorkerInstance) {
+                            ocrWorkerInstance = await Tesseract.createWorker('eng');
+                        }
+                        
+                        // Renderizar página no canvas com escala de 2x para melhor precisão do OCR
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Executar reconhecimento via Tesseract
+                        const { data: { text } } = await ocrWorkerInstance.recognize(canvas);
+                        pageText = text;
+                        console.log(`Página ${i}: OCR Concluído. Caracteres extraídos: ${pageText.length}`);
+                    } catch (ocrErr) {
+                        console.error(`Erro ao executar OCR na página ${i} do arquivo ${filename}:`, ocrErr);
+                    }
+                } else {
+                    console.log(`Página ${i}: Texto nativo extraído. Caracteres: ${pageText.length}`);
+                }
+                
                 fullText += pageText + '\n';
             }
+            
+            if (ocrWorkerInstance) {
+                await ocrWorkerInstance.terminate();
+            }
+            
             return fullText;
         }
 
@@ -1633,46 +1869,74 @@
                     return;
                 }
 
-                // 3. Limpeza detalhada usando o helper
-                const cleanResult = cleanDomainCandidate(clean);
-                if (!cleanResult.domain) {
+                // 3. Busca múltiplos candidatos a domínios/e-mails/IPs na linha usando regex de varredura global
+                const emailOrDomainOrIpRegex = /([a-z0-9._%+-]+@)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,24}|(?:[0-9]{1,3}\.){3}[0-9]{1,3})/gi;
+                const matches = Array.from(clean.matchAll(emailOrDomainOrIpRegex));
+
+                if (matches.length === 0) {
                     stats.invalidLines++;
                     stats.removedDetails.push({
                         line: lineNum,
                         text: line,
-                        reason: cleanResult.reason || 'Limpeza descartou domínio'
+                        reason: 'Nenhum padrão de domínio ou IP encontrado'
                     });
                     return;
                 }
 
-                const finalDomain = cleanResult.domain;
+                matches.forEach(match => {
+                    const isEmail = !!match[1];
+                    const candidate = match[2];
 
-                // 4. Verificação de duplicados no próprio arquivo
-                if (seenInFile.has(finalDomain)) {
-                    stats.duplicates++;
-                    stats.removedDetails.push({
-                        line: lineNum,
-                        text: line,
-                        reason: `Duplicado: ${finalDomain}`
-                    });
-                    return;
-                }
-                seenInFile.add(finalDomain);
-                stats.validDomains++;
+                    if (isEmail && state.rules.skipEmails) {
+                        stats.removedDetails.push({
+                            line: lineNum,
+                            text: match[0],
+                            reason: 'E-mail descartado pelas regras'
+                        });
+                        return;
+                    }
 
-                // 5. Atualização no estado global
-                if (state.domains[finalDomain]) {
-                    state.domains[finalDomain].count++;
-                } else {
-                    state.domains[finalDomain] = {
-                        count: 1,
-                        source: sourceFilename,
-                        manual: false,
-                        isWhitelisted: false,
-                        whitelistReason: ''
-                    };
-                    updateDomainWhitelistStatus(finalDomain);
-                }
+                    // Limpeza detalhada usando o helper
+                    const cleanResult = cleanDomainCandidate(candidate);
+                    if (!cleanResult.domain) {
+                        stats.invalidLines++;
+                        stats.removedDetails.push({
+                            line: lineNum,
+                            text: candidate,
+                            reason: cleanResult.reason || 'Limpeza descartou domínio'
+                        });
+                        return;
+                    }
+
+                    const finalDomain = cleanResult.domain;
+
+                    // 4. Verificação de duplicados no próprio arquivo
+                    if (seenInFile.has(finalDomain)) {
+                        stats.duplicates++;
+                        stats.removedDetails.push({
+                            line: lineNum,
+                            text: candidate,
+                            reason: `Duplicado: ${finalDomain}`
+                        });
+                        return;
+                    }
+                    seenInFile.add(finalDomain);
+                    stats.validDomains++;
+
+                    // 5. Atualização no estado global
+                    if (state.domains[finalDomain]) {
+                        state.domains[finalDomain].count++;
+                    } else {
+                        state.domains[finalDomain] = {
+                            count: 1,
+                            source: sourceFilename,
+                            manual: false,
+                            isWhitelisted: false,
+                            whitelistReason: ''
+                        };
+                        updateDomainWhitelistStatus(finalDomain);
+                    }
+                });
             });
 
             if (fileObj) {
@@ -1712,7 +1976,7 @@
             d = d.replace(/^https?:\/\//, '');
             d = d.split(/[\/\?#:]/)[0];
 
-            // Remove pontos ou '+' soltos nas extremidades (ex: artefatos de extorsão de texto)
+            // Remove pontos ou '+' soltos nas extremidades
             d = d.replace(/^[.+]+|[.+]+$/g, '');
 
             if (!d) {
@@ -1752,8 +2016,8 @@
 
         // Validação por expressão regular simples de estrutura de Domínio/IP
         function isValidDomainName(domain) {
-            // Aceita domínios com letras, números, hífens e pontos, ou endereços IPv4 válidos
-            const domainRegex = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,18}$/i;
+            // Aceita domínios com letras, números, hífens e pontos (incluindo TLDs modernos e múltiplos níveis), ou IPs IPv4
+            const domainRegex = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,24}$/i;
             const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
             return domainRegex.test(domain) || ipRegex.test(domain);
         }
@@ -1765,22 +2029,38 @@
             
             document.getElementById('tabBlocklistBtn').classList.toggle('active', tabName === 'blocklist');
             document.getElementById('tabWhitelistBtn').classList.toggle('active', tabName === 'whitelist');
+            document.getElementById('tabCompareBtn').classList.toggle('active', tabName === 'compare');
+            
+            const mainContent = document.getElementById('blocklistWhitelistContent');
+            const compareContent = document.getElementById('compareTabContent');
             
             const btnAddDomain = document.getElementById('btnAddDomain');
             const btnExportWhitelist = document.getElementById('btnExportWhitelist');
             const btnExport = document.getElementById('btnExport');
             
-            if (tabName === 'blocklist') {
-                btnAddDomain.style.display = 'flex';
-                btnExportWhitelist.style.display = 'none';
-                btnExport.style.display = 'flex';
+            if (tabName === 'compare') {
+                mainContent.style.display = 'none';
+                compareContent.style.display = 'flex';
+                
+                // Redesenha tabela do comparador
+                renderCompareTable();
+                updateCompareStats();
             } else {
-                btnAddDomain.style.display = 'none';
-                btnExportWhitelist.style.display = 'flex';
-                btnExport.style.display = 'none';
+                mainContent.style.display = 'flex';
+                compareContent.style.display = 'none';
+                
+                if (tabName === 'blocklist') {
+                    btnAddDomain.style.display = 'flex';
+                    btnExportWhitelist.style.display = 'none';
+                    btnExport.style.display = 'flex';
+                } else {
+                    btnAddDomain.style.display = 'none';
+                    btnExportWhitelist.style.display = 'flex';
+                    btnExport.style.display = 'none';
+                }
+                
+                renderTable();
             }
-            
-            renderTable();
         };
 
         // Renderiza a tabela de Domínios
@@ -2190,6 +2470,340 @@
             
             const date = new Date().toISOString().split('T')[0];
             link.download = `lista-branca-dominios-${date}.txt`;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Lógica de Comparação
+        function handleCompareFileSelect(e, type) {
+            if (e.target.files.length > 0) {
+                processCompareFile(e.target.files[0], type);
+            }
+        }
+
+        async function processCompareFile(file, type) {
+            const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+            const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
+
+            if (!isPdf && !isTxt) {
+                alert(`O arquivo "${file.name}" não é um PDF ou TXT válido.`);
+                return;
+            }
+
+            const labelEl = type === 'A' ? labelFileA : labelFileB;
+            const statusEl = type === 'A' ? statusFileA : statusFileB;
+            const fileInputEl = type === 'A' ? fileInputA : fileInputB;
+
+            labelEl.innerText = file.name;
+            statusEl.style.display = 'block';
+            statusEl.innerText = 'Processando...';
+
+            const reader = new FileReader();
+            reader.onload = async function() {
+                try {
+                    let text = '';
+                    if (isPdf) {
+                        const typedArray = new Uint8Array(this.result);
+                        text = await extractTextFromPdf(typedArray, file.name, (msg) => {
+                            statusEl.innerText = msg;
+                        });
+                    } else {
+                        text = this.result;
+                    }
+
+                    const extractedSet = extractDomainsOnly(text);
+                    
+                    if (type === 'A') {
+                        state.compare.fileA = {
+                            name: file.name,
+                            text: text,
+                            domains: extractedSet
+                        };
+                    } else {
+                        state.compare.fileB = {
+                            name: file.name,
+                            text: text,
+                            domains: extractedSet
+                        };
+                    }
+
+                    statusEl.innerText = `Sucesso (${extractedSet.size} domínios)`;
+                    
+                    // Executa a comparação se ambos estiverem carregados
+                    runComparison();
+                } catch (err) {
+                    console.error(err);
+                    statusEl.innerText = 'Erro ao ler arquivo';
+                } finally {
+                    fileInputEl.value = ''; // Limpa cache
+                }
+            };
+
+            reader.onerror = function() {
+                statusEl.innerText = 'Erro de leitura';
+                fileInputEl.value = '';
+            };
+
+            if (isPdf) {
+                reader.readAsArrayBuffer(file);
+            } else {
+                reader.readAsText(file, 'utf-8');
+            }
+        }
+
+        // Função simplificada para apenas extrair domínios limpos em formato Set
+        function extractDomainsOnly(text) {
+            const domainSet = new Set();
+            const lines = text.split(/\r?\n/);
+            
+            lines.forEach(line => {
+                let clean = line.trim();
+                
+                // Comentários
+                const commentIndex = clean.search(/(?:^|\s)(?:#|;|\/\/)/);
+                if (commentIndex !== -1) {
+                    clean = clean.substring(0, commentIndex).trim();
+                }
+                
+                if (!clean) return;
+
+                // hosts
+                const ipPrefixRegex = /^(?:(?:\d{1,3}\.){3}\d{1,3}|\[?[a-fA-F0-9:]+\]?)\s+/;
+                const ipMatch = clean.match(ipPrefixRegex);
+                if (ipMatch) {
+                    clean = clean.substring(ipMatch[0].length).trim();
+                }
+
+                if (!clean) return;
+
+                const emailOrDomainOrIpRegex = /([a-z0-9._%+-]+@)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,24}|(?:[0-9]{1,3}\.){3}[0-9]{1,3})/gi;
+                const matches = Array.from(clean.matchAll(emailOrDomainOrIpRegex));
+
+                matches.forEach(match => {
+                    const isEmail = !!match[1];
+                    const candidate = match[2];
+
+                    if (isEmail && state.rules.skipEmails) return;
+
+                    const cleanResult = cleanDomainCandidate(candidate);
+                    if (cleanResult.domain) {
+                        domainSet.add(cleanResult.domain);
+                    }
+                });
+            });
+
+            return domainSet;
+        }
+
+        // Executa comparação B contra A
+        function runComparison() {
+            const setA = state.compare.fileA.domains || new Set();
+            const setB = state.compare.fileB.domains || new Set();
+
+            const newDomains = [];
+            
+            setB.forEach(domain => {
+                if (!setA.has(domain)) {
+                    newDomains.push(domain);
+                }
+            });
+
+            state.compare.results = newDomains.sort();
+            state.compare.pagination.currentPage = 1;
+            
+            renderCompareTable();
+            updateCompareStats();
+        }
+
+        // Atualiza contadores específicos do comparador
+        function updateCompareStats() {
+            const setA = state.compare.fileA.domains || new Set();
+            const setB = state.compare.fileB.domains || new Set();
+            const results = state.compare.results || [];
+
+            document.getElementById('statCompareA').innerText = setA.size;
+            document.getElementById('statCompareB').innerText = setB.size;
+            
+            const duplicated = setB.size - results.length;
+            document.getElementById('statCompareDuplicated').innerText = Math.max(0, duplicated);
+            document.getElementById('statCompareNew').innerText = results.length;
+        }
+
+        // Renderiza a tabela de domínios inéditos
+        function renderCompareTable() {
+            compareTableBody.innerHTML = '';
+            
+            let filteredList = state.compare.results || [];
+            
+            if (state.compare.searchQuery) {
+                filteredList = filteredList.filter(d => d.includes(state.compare.searchQuery));
+            }
+
+            if (filteredList.length === 0) {
+                compareTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="2">
+                            <div class="empty-state" style="padding: 3rem 1rem;">
+                                <svg class="empty-icon" viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                <h3>Nenhum domínio inédito encontrado</h3>
+                                <p>${state.compare.searchQuery ? 'Tente ajustar sua busca.' : 'Os arquivos comparados podem ser idênticos ou nenhum arquivo foi carregado.'}</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                comparePaginationContainer.innerHTML = '';
+                return;
+            }
+
+            const pag = state.compare.pagination;
+            const totalItems = filteredList.length;
+            const totalPages = Math.ceil(totalItems / pag.pageSize);
+
+            if (pag.currentPage > totalPages) pag.currentPage = totalPages;
+            if (pag.currentPage < 1) pag.currentPage = 1;
+
+            const startIndex = (pag.currentPage - 1) * pag.pageSize;
+            const endIndex = Math.min(startIndex + pag.pageSize, totalItems);
+            const paginatedItems = filteredList.slice(startIndex, endIndex);
+
+            paginatedItems.forEach(domain => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>
+                        <div class="domain-cell">
+                            <span class="domain-name" style="padding-left: 0.4rem; color: #fff;">${domain}</span>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="actions-cell" style="justify-content: center;">
+                            <button class="action-icon-btn delete" onclick="deleteCompareDomain('${domain}')" title="Excluir da Lista Resultante">
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            </button>
+                        </div>
+                    </td>
+                `;
+                compareTableBody.appendChild(tr);
+            });
+
+            renderComparePaginationControls(totalPages, pag.currentPage, totalItems, startIndex + 1, endIndex);
+        }
+
+        // Renderiza botões de controle da paginação do comparador
+        function renderComparePaginationControls(totalPages, currentPage, totalItems, startItem, endItem) {
+            comparePaginationContainer.innerHTML = '';
+
+            if (totalPages <= 1) {
+                comparePaginationContainer.innerHTML = `
+                    <div>Mostrando todos os <b>${totalItems}</b> inéditos</div>
+                    <div></div>
+                `;
+                return;
+            }
+
+            const infoDiv = document.createElement('div');
+            infoDiv.innerHTML = `Mostrando <b>${startItem}-${endItem}</b> de <b>${totalItems}</b> inéditos`;
+            comparePaginationContainer.appendChild(infoDiv);
+
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.className = 'pagination-buttons';
+
+            const btnFirst = document.createElement('button');
+            btnFirst.className = 'pagination-btn';
+            btnFirst.innerText = '«';
+            btnFirst.disabled = (currentPage === 1);
+            btnFirst.onclick = () => changeComparePage(1);
+            buttonsDiv.appendChild(btnFirst);
+
+            const btnPrev = document.createElement('button');
+            btnPrev.className = 'pagination-btn';
+            btnPrev.innerText = '‹';
+            btnPrev.disabled = (currentPage === 1);
+            btnPrev.onclick = () => changeComparePage(currentPage - 1);
+            buttonsDiv.appendChild(btnPrev);
+
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, currentPage + 2);
+            
+            if (currentPage <= 3) endPage = Math.min(totalPages, 5);
+            if (currentPage >= totalPages - 2) startPage = Math.max(1, totalPages - 4);
+
+            for (let i = startPage; i <= endPage; i++) {
+                const btnPage = document.createElement('button');
+                btnPage.className = `pagination-btn ${i === currentPage ? 'active' : ''}`;
+                btnPage.innerText = i;
+                btnPage.onclick = () => changeComparePage(i);
+                buttonsDiv.appendChild(btnPage);
+            }
+
+            const btnNext = document.createElement('button');
+            btnNext.className = 'pagination-btn';
+            btnNext.innerText = '›';
+            btnNext.disabled = (currentPage === totalPages);
+            btnNext.onclick = () => changeComparePage(currentPage + 1);
+            buttonsDiv.appendChild(btnNext);
+
+            const btnLast = document.createElement('button');
+            btnLast.className = 'pagination-btn';
+            btnLast.innerText = '»';
+            btnLast.disabled = (currentPage === totalPages);
+            btnLast.onclick = () => changeComparePage(totalPages);
+            buttonsDiv.appendChild(btnLast);
+
+            comparePaginationContainer.appendChild(buttonsDiv);
+        }
+
+        window.changeComparePage = function(pageNumber) {
+            state.compare.pagination.currentPage = pageNumber;
+            renderCompareTable();
+            document.querySelector('#compareTabContent .table-wrapper').scrollTop = 0;
+        };
+
+        // Permite excluir um domínio inédito resultante da comparação localmente
+        window.deleteCompareDomain = function(domain) {
+            state.compare.results = state.compare.results.filter(d => d !== domain);
+            renderCompareTable();
+            updateCompareStats();
+        };
+
+        // Limpa o estado do comparador
+        function clearCompare() {
+            state.compare.fileA = { name: '', text: '', domains: new Set() };
+            state.compare.fileB = { name: '', text: '', domains: new Set() };
+            state.compare.results = [];
+            state.compare.searchQuery = '';
+            
+            document.getElementById('labelFileA').innerText = 'Carregar Lista A';
+            document.getElementById('labelFileB').innerText = 'Carregar Lista B';
+            
+            document.getElementById('statusFileA').style.display = 'none';
+            document.getElementById('statusFileB').style.display = 'none';
+            
+            document.getElementById('fileInputA').value = '';
+            document.getElementById('fileInputB').value = '';
+            document.getElementById('compareSearchBar').value = '';
+            
+            renderCompareTable();
+            updateCompareStats();
+        }
+
+        // Exporta resultados inéditos em TXT
+        function exportCompareResults() {
+            const results = state.compare.results || [];
+            if (results.length === 0) {
+                alert('Nenhum domínio inédito disponível para exportar.');
+                return;
+            }
+
+            const textContent = results.join('\n');
+            const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            
+            const date = new Date().toISOString().split('T')[0];
+            link.download = `dominios-ineditos-${date}.txt`;
             
             document.body.appendChild(link);
             link.click();
