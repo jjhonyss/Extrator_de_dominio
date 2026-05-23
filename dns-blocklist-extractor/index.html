@@ -836,6 +836,45 @@
             color: #fff;
         }
 
+        .tab-btn.invalid-tab.active {
+            background: rgba(244, 63, 94, 0.12);
+            border-color: rgba(244, 63, 94, 0.3);
+            box-shadow: 0 0 10px rgba(244, 63, 94, 0.1);
+        }
+
+        .tab-btn.invalid-tab.active .tab-badge {
+            background: var(--accent-rose);
+        }
+
+        .invalid-reason-badge {
+            display: inline-block;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+            background: rgba(244, 63, 94, 0.1);
+            border: 1px solid rgba(244, 63, 94, 0.18);
+            color: #fda4af;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .invalid-original-cell {
+            font-family: monospace;
+            color: #fff;
+            word-break: break-word;
+            white-space: pre-wrap;
+            max-width: 420px;
+        }
+
+        .line-badge {
+            display: inline-block;
+            padding: 0.12rem 0.35rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
         /* Pagination styles */
         .pagination-container {
             display: flex;
@@ -1089,6 +1128,10 @@
                         Lista Branca
                         <span class="tab-badge" id="badgeWhitelistCount">0</span>
                     </button>
+                    <button class="tab-btn invalid-tab" id="tabInvalidBtn" onclick="switchTab('invalid')">
+                        Inválidos
+                        <span class="tab-badge" id="badgeInvalidCount">0</span>
+                    </button>
                     <button class="tab-btn" id="tabCompareBtn" onclick="switchTab('compare')">
                         Comparador de Domínios
                     </button>
@@ -1144,6 +1187,39 @@
 
                     <div class="pagination-container" id="paginationContainer">
                         <!-- Dynamic pagination controls will render here -->
+                    </div>
+                </div>
+
+                <!-- Bloco de Auditoria de Inválidos -->
+                <div id="invalidTabContent" style="display: none; flex-direction: column; flex: 1;">
+                    <div class="table-toolbar">
+                        <div class="search-container">
+                            <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <input type="text" id="invalidSearchBar" class="search-input" placeholder="Pesquisar texto, motivo, origem ou linha...">
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                            Total de inválidos: <b id="invalidTotalCount" style="color:#fda4af;">0</b>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width: 42%;">Domínio/Texto Original</th>
+                                    <th style="width: 24%;">Motivo da Invalidação</th>
+                                    <th style="width: 24%;">Origem</th>
+                                    <th style="width: 10%; text-align: center;">Linha</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invalidTableBody">
+                                <!-- Invalid audit rows render here -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-container" id="invalidPaginationContainer">
+                        <!-- Dynamic invalid pagination controls will render here -->
                     </div>
                 </div>
 
@@ -1259,12 +1335,15 @@
         const state = {
             files: [], // { name: string, status: 'loading' | 'success' | 'error' }
             domains: {}, // { 'domain.com': { count: 1, source: 'file.pdf', manual: false, isWhitelisted: false, whitelistReason: '' } }
+            invalidDomains: [], // Auditoria temporária: { id, text, reason, source, line }
+            invalidSearchQuery: '',
             whitelist: new Set([]),
             searchQuery: '',
-            activeTab: 'blocklist', // 'blocklist' | 'whitelist'
+            activeTab: 'blocklist', // 'blocklist' | 'whitelist' | 'invalid' | 'compare'
             pagination: {
                 blocklist: { currentPage: 1, pageSize: 100 },
-                whitelist: { currentPage: 1, pageSize: 100 }
+                whitelist: { currentPage: 1, pageSize: 100 },
+                invalid: { currentPage: 1, pageSize: 100 }
             },
             rules: {
                 ignoreIps: true,
@@ -1282,6 +1361,8 @@
             }
         };
 
+        let invalidAuditSequence = 0;
+
         // Elementos DOM
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
@@ -1295,6 +1376,10 @@
         const btnExportWhitelist = document.getElementById('btnExportWhitelist');
         const btnClearAll = document.getElementById('btnClearAll');
         const btnAddDomain = document.getElementById('btnAddDomain');
+        const invalidSearchBar = document.getElementById('invalidSearchBar');
+        const invalidTableBody = document.getElementById('invalidTableBody');
+        const invalidPaginationContainer = document.getElementById('invalidPaginationContainer');
+        const invalidTotalCount = document.getElementById('invalidTotalCount');
 
         // Elementos DOM Comparador
         const dropzoneA = document.getElementById('dropzoneA');
@@ -1339,6 +1424,7 @@
         function init() {
             renderWhitelist();
             renderTable();
+            renderInvalidTable();
             updateStats();
             setupEventListeners();
         }
@@ -1417,6 +1503,14 @@
                 resetPagination();
                 renderTable();
             });
+
+            if (invalidSearchBar) {
+                invalidSearchBar.addEventListener('input', (e) => {
+                    state.invalidSearchQuery = e.target.value.toLowerCase().trim();
+                    state.pagination.invalid.currentPage = 1;
+                    renderInvalidTable();
+                });
+            }
 
             // Botões de Ações Gerais
             btnClearAll.addEventListener('click', clearAll);
@@ -1544,6 +1638,32 @@
         function resetPagination() {
             state.pagination.blocklist.currentPage = 1;
             state.pagination.whitelist.currentPage = 1;
+            state.pagination.invalid.currentPage = 1;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                "'": '&#39;',
+                '"': '&quot;'
+            }[char]));
+        }
+
+        function addInvalidAuditEntry({ text, reason, source, line }) {
+            state.invalidDomains.push({
+                id: ++invalidAuditSequence,
+                text: String(text ?? ''),
+                reason: reason || 'Motivo não informado',
+                source: source || 'Origem desconhecida',
+                line: line || ''
+            });
+        }
+
+        function addInvalidFromProcessing(stats, sourceFilename, line, text, reason) {
+            stats.removedDetails.push({ line, text, reason });
+            addInvalidAuditEntry({ text, reason, source: sourceFilename, line });
         }
 
         // Adiciona um domínio de exceção a partir do input
@@ -1617,7 +1737,8 @@
                     name: file.name,
                     status: 'loading',
                     statusMessage: 'Lendo...',
-                    rawText: '' // Salvaremos o texto bruto para permitir re-processamento com regras diferentes
+                    rawText: '', // Salvaremos o texto bruto para permitir re-processamento com regras diferentes
+                    auditEvents: []
                 };
                 
                 state.files.push(fileObj);
@@ -1648,6 +1769,7 @@
                         
                         renderFileList();
                         renderTable();
+                        renderInvalidTable();
                         updateStats();
                     } catch (err) {
                         console.error(err);
@@ -1772,6 +1894,18 @@
                         console.log(`Página ${i}: OCR Concluído. Caracteres extraídos: ${pageText.length}`);
                     } catch (ocrErr) {
                         console.error(`Erro ao executar OCR na página ${i} do arquivo ${filename}:`, ocrErr);
+                        const auditEvent = {
+                            text: `Página ${i} sem texto OCR recuperável`,
+                            reason: 'Falha OCR',
+                            source: filename,
+                            line: `pág. ${i}`
+                        };
+                        const auditFile = state.files.find(f => f.name === filename);
+                        if (auditFile) {
+                            auditFile.auditEvents = auditFile.auditEvents || [];
+                            auditFile.auditEvents.push(auditEvent);
+                        }
+                        addInvalidAuditEntry(auditEvent);
                     }
                 } else {
                     console.log(`Página ${i}: Texto nativo extraído. Caracteres: ${pageText.length}`);
@@ -1799,10 +1933,12 @@
 
             // Reseta domínios
             state.domains = { ...manualDomains };
+            state.invalidDomains = [];
 
             // Processa novamente o texto bruto de cada arquivo com sucesso
             state.files.forEach(file => {
                 if (file.status === 'success' && file.rawText) {
+                    (file.auditEvents || []).forEach(addInvalidAuditEntry);
                     extractDomainsFromText(file.rawText, file.name);
                 }
             });
@@ -1810,6 +1946,7 @@
             updateAllDomainsWhitelistStatus();
             resetPagination();
             renderTable();
+            renderInvalidTable();
             updateStats();
         }
 
@@ -1861,11 +1998,7 @@
 
                 if (!clean) {
                     stats.emptyLines++;
-                    stats.removedDetails.push({
-                        line: lineNum,
-                        text: line,
-                        reason: 'Apenas IP sem domínio'
-                    });
+                    addInvalidFromProcessing(stats, sourceFilename, lineNum, line, 'Apenas IP sem domínio');
                     return;
                 }
 
@@ -1875,11 +2008,7 @@
 
                 if (matches.length === 0) {
                     stats.invalidLines++;
-                    stats.removedDetails.push({
-                        line: lineNum,
-                        text: line,
-                        reason: 'Nenhum padrão de domínio ou IP encontrado'
-                    });
+                    addInvalidFromProcessing(stats, sourceFilename, lineNum, line, 'Nenhum padrão de domínio ou IP encontrado');
                     return;
                 }
 
@@ -1888,11 +2017,7 @@
                     const candidate = match[2];
 
                     if (isEmail && state.rules.skipEmails) {
-                        stats.removedDetails.push({
-                            line: lineNum,
-                            text: match[0],
-                            reason: 'E-mail descartado pelas regras'
-                        });
+                        addInvalidFromProcessing(stats, sourceFilename, lineNum, match[0], 'E-mail descartado pelas regras');
                         return;
                     }
 
@@ -1900,11 +2025,7 @@
                     const cleanResult = cleanDomainCandidate(candidate);
                     if (!cleanResult.domain) {
                         stats.invalidLines++;
-                        stats.removedDetails.push({
-                            line: lineNum,
-                            text: candidate,
-                            reason: cleanResult.reason || 'Limpeza descartou domínio'
-                        });
+                        addInvalidFromProcessing(stats, sourceFilename, lineNum, candidate, cleanResult.reason || 'Limpeza descartou domínio');
                         return;
                     }
 
@@ -2029,9 +2150,11 @@
             
             document.getElementById('tabBlocklistBtn').classList.toggle('active', tabName === 'blocklist');
             document.getElementById('tabWhitelistBtn').classList.toggle('active', tabName === 'whitelist');
+            document.getElementById('tabInvalidBtn').classList.toggle('active', tabName === 'invalid');
             document.getElementById('tabCompareBtn').classList.toggle('active', tabName === 'compare');
             
             const mainContent = document.getElementById('blocklistWhitelistContent');
+            const invalidContent = document.getElementById('invalidTabContent');
             const compareContent = document.getElementById('compareTabContent');
             
             const btnAddDomain = document.getElementById('btnAddDomain');
@@ -2040,13 +2163,21 @@
             
             if (tabName === 'compare') {
                 mainContent.style.display = 'none';
+                invalidContent.style.display = 'none';
                 compareContent.style.display = 'flex';
                 
                 // Redesenha tabela do comparador
                 renderCompareTable();
                 updateCompareStats();
+            } else if (tabName === 'invalid') {
+                mainContent.style.display = 'none';
+                invalidContent.style.display = 'flex';
+                compareContent.style.display = 'none';
+
+                renderInvalidTable();
             } else {
                 mainContent.style.display = 'flex';
+                invalidContent.style.display = 'none';
                 compareContent.style.display = 'none';
                 
                 if (tabName === 'blocklist') {
@@ -2076,6 +2207,13 @@
                 domain: d,
                 ...state.domains[d]
             }));
+
+            if (state.activeTab !== 'blocklist' && state.activeTab !== 'whitelist') {
+                document.getElementById('badgeBlocklistCount').innerText = domainList.filter(item => !item.isWhitelisted).length;
+                document.getElementById('badgeWhitelistCount').innerText = domainList.filter(item => item.isWhitelisted).length;
+                document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.length;
+                return;
+            }
 
             // 2. Filtra por termo de busca
             let filteredList = domainList.filter(item => {
@@ -2240,6 +2378,142 @@
             renderPaginationControls(totalPages, pag.currentPage, totalItems, startIndex + 1, endIndex);
         }
 
+        function renderInvalidTable() {
+            if (!invalidTableBody || !invalidPaginationContainer) return;
+
+            invalidTableBody.innerHTML = '';
+
+            const query = state.invalidSearchQuery;
+            let filteredList = state.invalidDomains;
+            if (query) {
+                filteredList = filteredList.filter(item => {
+                    return item.text.toLowerCase().includes(query) ||
+                        item.reason.toLowerCase().includes(query) ||
+                        item.source.toLowerCase().includes(query) ||
+                        String(item.line).toLowerCase().includes(query);
+                });
+            }
+
+            if (invalidTotalCount) {
+                invalidTotalCount.innerText = state.invalidDomains.length;
+            }
+            document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.length;
+
+            if (filteredList.length === 0) {
+                invalidTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="4">
+                            <div class="empty-state">
+                                <svg class="empty-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                                <h3>Nenhum inválido encontrado</h3>
+                                <p>${query ? 'Tente ajustar sua busca.' : 'Os descartes por invalidação aparecerão aqui durante o processamento.'}</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                invalidPaginationContainer.innerHTML = '';
+                return;
+            }
+
+            const pag = state.pagination.invalid;
+            const totalItems = filteredList.length;
+            const totalPages = Math.ceil(totalItems / pag.pageSize);
+
+            if (pag.currentPage > totalPages) pag.currentPage = totalPages;
+            if (pag.currentPage < 1) pag.currentPage = 1;
+
+            const startIndex = (pag.currentPage - 1) * pag.pageSize;
+            const endIndex = Math.min(startIndex + pag.pageSize, totalItems);
+            const paginatedItems = filteredList.slice(startIndex, endIndex);
+
+            paginatedItems.forEach(item => {
+                const tr = document.createElement('tr');
+                const safeText = escapeHtml(item.text);
+                const safeReason = escapeHtml(item.reason);
+                const safeSource = escapeHtml(item.source);
+                const safeLine = escapeHtml(item.line || '-');
+
+                tr.innerHTML = `
+                    <td><div class="invalid-original-cell" title="${safeText}">${safeText}</div></td>
+                    <td><span class="invalid-reason-badge">${safeReason}</span></td>
+                    <td><div class="source-cell" title="${safeSource}">${safeSource}</div></td>
+                    <td style="text-align: center;"><span class="line-badge">${safeLine}</span></td>
+                `;
+                invalidTableBody.appendChild(tr);
+            });
+
+            renderInvalidPaginationControls(totalPages, pag.currentPage, totalItems, startIndex + 1, endIndex);
+        }
+
+        function renderInvalidPaginationControls(totalPages, currentPage, totalItems, startItem, endItem) {
+            invalidPaginationContainer.innerHTML = '';
+
+            if (totalPages <= 1) {
+                invalidPaginationContainer.innerHTML = `
+                    <div>Mostrando todos os <b>${totalItems}</b> inválidos</div>
+                    <div></div>
+                `;
+                return;
+            }
+
+            const infoDiv = document.createElement('div');
+            infoDiv.innerHTML = `Mostrando <b>${startItem}-${endItem}</b> de <b>${totalItems}</b> inválidos`;
+            invalidPaginationContainer.appendChild(infoDiv);
+
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.className = 'pagination-buttons';
+
+            const btnFirst = document.createElement('button');
+            btnFirst.className = 'pagination-btn';
+            btnFirst.innerText = '«';
+            btnFirst.disabled = (currentPage === 1);
+            btnFirst.onclick = () => changeInvalidPage(1);
+            buttonsDiv.appendChild(btnFirst);
+
+            const btnPrev = document.createElement('button');
+            btnPrev.className = 'pagination-btn';
+            btnPrev.innerText = '‹';
+            btnPrev.disabled = (currentPage === 1);
+            btnPrev.onclick = () => changeInvalidPage(currentPage - 1);
+            buttonsDiv.appendChild(btnPrev);
+
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, currentPage + 2);
+
+            if (currentPage <= 3) endPage = Math.min(totalPages, 5);
+            if (currentPage >= totalPages - 2) startPage = Math.max(1, totalPages - 4);
+
+            for (let i = startPage; i <= endPage; i++) {
+                const btnPage = document.createElement('button');
+                btnPage.className = `pagination-btn ${i === currentPage ? 'active' : ''}`;
+                btnPage.innerText = i;
+                btnPage.onclick = () => changeInvalidPage(i);
+                buttonsDiv.appendChild(btnPage);
+            }
+
+            const btnNext = document.createElement('button');
+            btnNext.className = 'pagination-btn';
+            btnNext.innerText = '›';
+            btnNext.disabled = (currentPage === totalPages);
+            btnNext.onclick = () => changeInvalidPage(currentPage + 1);
+            buttonsDiv.appendChild(btnNext);
+
+            const btnLast = document.createElement('button');
+            btnLast.className = 'pagination-btn';
+            btnLast.innerText = '»';
+            btnLast.disabled = (currentPage === totalPages);
+            btnLast.onclick = () => changeInvalidPage(totalPages);
+            buttonsDiv.appendChild(btnLast);
+
+            invalidPaginationContainer.appendChild(buttonsDiv);
+        }
+
+        window.changeInvalidPage = function(pageNumber) {
+            state.pagination.invalid.currentPage = pageNumber;
+            renderInvalidTable();
+            document.querySelector('#invalidTabContent .table-wrapper').scrollTop = 0;
+        };
+
         // Renderiza botões de controle da paginação
         function renderPaginationControls(totalPages, currentPage, totalItems, startItem, endItem) {
             const paginationContainer = document.getElementById('paginationContainer');
@@ -2371,6 +2645,14 @@
             
             const cleanResult = cleanDomainCandidate(domain);
             if (!cleanResult.domain) {
+                addInvalidAuditEntry({
+                    text: domain,
+                    reason: cleanResult.reason,
+                    source: 'Adição Manual',
+                    line: '-'
+                });
+                renderInvalidTable();
+                updateStats();
                 alert("Domínio inválido ou ignorado: " + cleanResult.reason);
                 return;
             }
@@ -2416,6 +2698,11 @@
 
             const readyCount = domainList.length - filteredCount;
             statExportCount.innerText = readyCount;
+
+            const invalidCount = state.invalidDomains.length;
+            const badgeInvalidCount = document.getElementById('badgeInvalidCount');
+            if (badgeInvalidCount) badgeInvalidCount.innerText = invalidCount;
+            if (invalidTotalCount) invalidTotalCount.innerText = invalidCount;
         }
 
         // Limpa todos os dados
@@ -2423,9 +2710,13 @@
             if (confirm("Deseja realmente limpar todos os arquivos e domínios carregados?")) {
                 state.files = [];
                 state.domains = {};
+                state.invalidDomains = [];
+                state.invalidSearchQuery = '';
+                if (invalidSearchBar) invalidSearchBar.value = '';
                 renderFileList();
                 resetPagination();
                 renderTable();
+                renderInvalidTable();
                 updateStats();
             }
         }
