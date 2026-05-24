@@ -5,6 +5,11 @@
     const FALLBACK_TOKEN_REGEX = /[\p{L}0-9][\p{L}0-9.-]{1,80}[\p{L}0-9-]?/gu;
     const IP_PREFIX_REGEX = /^(?:(?:\d{1,3}\.){3}\d{1,3}|\[[a-fA-F0-9:]+\]|(?:[a-fA-F0-9]{1,4}:){2,}[a-fA-F0-9:]{0,})\s+/;
     const COMMENT_REGEX = /(?:^|\s)(?:#|;|\/\/)/;
+    const JUDICIAL_CASE_REGEX = /^\d{4,7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}$/;
+    const OCR_TRUNCATED_TLD_REPAIRS = {
+        inf: 'info',
+        onli: 'online'
+    };
     const CRITICAL_SUFFIXES = {
         government: ['.gov.br', '.gov', '.jus.br', '.mp.br', '.leg.br', '.def.br', '.mil.br'],
         anatel: ['anatel.br', 'anatel.gov.br'],
@@ -69,6 +74,48 @@
         return /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(value);
     }
 
+    function isLikelyJudicialCaseNumber(value) {
+        const candidate = String(value || '').trim().toLowerCase();
+        if (!candidate || !candidate.includes('.')) return false;
+        if (JUDICIAL_CASE_REGEX.test(candidate)) return true;
+
+        const parts = candidate.split('.');
+        if (parts.length >= 3 && parts.every(part => /^\d+(?:-\d+)?$/.test(part))) {
+            return true;
+        }
+
+        if (parts.length < 4) return false;
+
+        const numericLikeParts = parts.filter(part => /^\d+(?:-\d+)?$/.test(part)).length;
+        const alphabeticParts = parts.filter(part => /[\p{L}]/u.test(part)).length;
+        return numericLikeParts >= 4 && alphabeticParts === 0;
+    }
+
+    function isLikelyTruncatedOcrDomain(value) {
+        const candidate = String(value || '').trim().toLowerCase();
+        const parts = candidate.split('.').filter(Boolean);
+        if (parts.length < 2) return false;
+
+        const tld = parts[parts.length - 1];
+
+        if (OCR_TRUNCATED_TLD_REPAIRS[tld]) return true;
+
+        return false;
+    }
+
+    function repairTruncatedOcrDomain(value) {
+        const candidate = String(value || '').trim().toLowerCase();
+        const parts = candidate.split('.').filter(Boolean);
+        if (parts.length < 2) return candidate;
+
+        const tld = parts[parts.length - 1];
+        const repairedTld = OCR_TRUNCATED_TLD_REPAIRS[tld];
+        if (!repairedTld) return candidate;
+
+        parts[parts.length - 1] = repairedTld;
+        return parts.join('.');
+    }
+
     function isClearSingleLabelCandidate(token, wholeLine) {
         const candidate = String(token || '').trim().toLowerCase().replace(/^[.+-]+|[.+-]+$/g, '');
         if (candidate.length < 3 || candidate.length > 63) return false;
@@ -117,6 +164,10 @@
         d = d.split(/[\/\?#:]/)[0];
         d = d.replace(/^[.+]+|[.+]+$/g, '');
 
+        if (isLikelyTruncatedOcrDomain(d)) {
+            d = repairTruncatedOcrDomain(d);
+        }
+
         if (!d) {
             return { domain: null, reason: 'URL vazia após limpeza' };
         }
@@ -139,6 +190,10 @@
 
         if (!isValidDomainName(d)) {
             return { domain: null, reason: 'Estrutura de domínio/IP inválida' };
+        }
+
+        if (isLikelyJudicialCaseNumber(d)) {
+            return { domain: null, reason: 'Identificador processual/judicial descartado' };
         }
 
         const parts = d.split('.');

@@ -1,0 +1,71 @@
+{
+  "generatedAt": "2026-05-24T05:02:11.247Z",
+  "directories": {
+    "finalResult": "exports",
+    "auditReport": "audits",
+    "fixtures": "fixtures",
+    "knowledgeBase": "knowledge-base"
+  },
+  "files": {
+    "listA": {
+      "name": "resultado-108-2026-op_404_47alvos_fase5_dominios_a-20260524-015504.txt",
+      "inputType": "txt",
+      "uniqueDomains": 7403
+    },
+    "listB": {
+      "name": "resultado-108-2026-op_404_47alvos_fase5_dominios_a-20260524-012918.txt",
+      "inputType": "txt",
+      "uniqueDomains": 7414
+    }
+  },
+  "outputs": {
+    "resultFileName": "arquivo_master-20260524-020211.txt",
+    "auditFileName": "arquivo_master_auditoria-20260524-020211.json"
+  },
+  "rules": {
+    "ignoreIps": true,
+    "skipEmails": true,
+    "whitelistGov": true,
+    "whitelistAnatel": true,
+    "removeWww": false
+  },
+  "counts": {
+    "uniqueInA": 7403,
+    "uniqueInB": 7414,
+    "duplicatedInA": 7403,
+    "onlyInA": 0,
+    "onlyInB": 11,
+    "whitelistExcluded": 0,
+    "finalNewDomains": 11
+  },
+  "compare": {
+    "onlyInA": [],
+    "onlyInB": [
+      "0008847-51.2023.8.17.2001",
+      "09909.9149.00004",
+      "cuevana3.accountants",
+      "cuevana3.associates",
+      "cuevana3.consulting",
+      "cuevana3.engineering",
+      "cuevana3.foundation",
+      "cuevana3.investments",
+      "cuevana3.photography",
+      "cuevana3.restaurant",
+      "cuevana3.technology"
+    ],
+    "whitelistExcluded": [],
+    "finalNewDomains": [
+      "0008847-51.2023.8.17.2001",
+      "09909.9149.00004",
+      "cuevana3.accountants",
+      "cuevana3.associates",
+      "cuevana3.consulting",
+      "cuevana3.engineering",
+      "cuevana3.foundation",
+      "cuevana3.investments",
+      "cuevana3.photography",
+      "cuevana3.restaurant",
+      "cuevana3.technology"
+    ]
+  }
+}
