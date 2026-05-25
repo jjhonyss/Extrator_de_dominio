@@ -210,8 +210,10 @@
     function createStats() {
         return {
             totalLines: 0,
+            recognizedDomains: 0,
             emptyLines: 0,
             invalidLines: 0,
+            invalidCandidates: 0,
             duplicates: 0,
             validDomains: 0,
             removedDetails: []
@@ -239,21 +241,6 @@
             clean = clean.substring(ipMatch[0].length).trim();
         }
         return clean;
-    }
-
-    function normalizeLiteralListEntry(value) {
-        return String(value || '')
-            .replace(/^\uFEFF/, '')
-            .trim()
-            .toLowerCase();
-    }
-
-    function looksLikeTrustedListEntry(value) {
-        const candidate = normalizeLiteralListEntry(value);
-        if (!candidate || /\s/.test(candidate)) return false;
-        if (candidate.includes('@')) return false;
-        if (candidate.length > 255) return false;
-        return candidate.includes('.') || candidate === 'localhost';
     }
 
     function shouldPreferStructuredTxtMode(text) {
@@ -332,6 +319,7 @@
             if (lineLooksLiteral) {
                 const cleanResult = cleanDomainCandidate(clean, rulesInput);
                 if (cleanResult.domain) {
+                    stats.recognizedDomains++;
                     const finalDomain = cleanResult.domain;
                     if (seenInFile.has(finalDomain)) {
                         stats.duplicates++;
@@ -346,41 +334,34 @@
                     return;
                 }
 
-                if (looksLikeTrustedListEntry(clean)) {
-                    const finalDomain = normalizeLiteralListEntry(clean);
-                    if (seenInFile.has(finalDomain)) {
-                        stats.duplicates++;
-                        addRemoved(lineNum, clean, `Duplicado: ${finalDomain}`);
-                        addReview(lineNum, clean, `Duplicado: ${finalDomain}`, 'duplicate_in_file');
-                        return;
-                    }
-
-                    seenInFile.add(finalDomain);
-                    stats.validDomains++;
-                    domains.push({ domain: finalDomain, source: sourceFilename, line: lineNum, original: clean });
-                    return;
-                }
             }
 
             const matches = collectMatches(clean);
             if (matches.length === 0) {
                 const cleanResult = cleanDomainCandidate(clean, rulesInput);
                 stats.invalidLines++;
+                if (lineLooksLiteral) {
+                    stats.recognizedDomains++;
+                    stats.invalidCandidates++;
+                }
                 addInvalid(lineNum, clean, cleanResult.reason || 'Nenhum padrão de domínio ou IP encontrado');
                 return;
             }
 
             let lineProducedDomain = false;
             matches.forEach(match => {
+                stats.recognizedDomains++;
                 const cleanResult = cleanDomainCandidate(match.candidate, rulesInput);
                 if (!cleanResult.domain) {
                     stats.invalidLines++;
+                    stats.invalidCandidates++;
                     addInvalid(lineNum, match.candidate, cleanResult.reason || 'Limpeza descartou domínio');
                     return;
                 }
 
                 const finalDomain = cleanResult.domain;
                 if (match.isEmail && rules.skipEmails && !getAutoWhitelistReason(finalDomain, rules)) {
+                    stats.invalidCandidates++;
                     addInvalid(lineNum, match.original, 'E-mail descartado pelas regras');
                     return;
                 }
@@ -481,16 +462,19 @@
             matches.forEach(match => {
                 const isEmail = match.isEmail;
                 const candidate = match.candidate;
+                stats.recognizedDomains++;
 
                 const cleanResult = cleanDomainCandidate(candidate, rules);
                 if (!cleanResult.domain) {
                     stats.invalidLines++;
+                    stats.invalidCandidates++;
                     addInvalid(lineNum, candidate, cleanResult.reason || 'Limpeza descartou domínio');
                     return;
                 }
 
                 const finalDomain = cleanResult.domain;
                 if (isEmail && rules.skipEmails && !getAutoWhitelistReason(finalDomain, rules)) {
+                    stats.invalidCandidates++;
                     addInvalid(lineNum, match.original, 'E-mail descartado pelas regras');
                     return;
                 }

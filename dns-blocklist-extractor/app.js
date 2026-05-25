@@ -6,7 +6,8 @@
             files: [], // { name, status, rawText, extractedDomains, stats, ... }
             domains: {}, // { 'domain.com': { count, source, manual, isWhitelisted, whitelistReason } }
             manuallyDeletedDomains: new Set(),
-            invalidDomains: [], // Auditoria temporária: { id, text, reason, source, line }
+            reviewItems: [],
+            auditItems: [],
             invalidSearchQuery: '',
             invalidFilter: 'all',
             whitelist: new Set([]),
@@ -50,6 +51,8 @@
         };
 
         let invalidAuditSequence = 0;
+        let nextFileSequence = 0;
+        let reviewIndexByKey = new Map();
 
         // Elementos DOM
         const dropzone = document.getElementById('dropzone');
@@ -158,6 +161,28 @@
             if (lowerName.endsWith('.pdf')) return 'pdf';
             if (lowerName.endsWith('.txt')) return 'txt';
             return 'desconhecido';
+        }
+
+        function buildFileFingerprint(file) {
+            return [
+                file.name || '',
+                file.size || 0,
+                file.lastModified || 0,
+                file.type || ''
+            ].join('|');
+        }
+
+        function createFileId() {
+            nextFileSequence += 1;
+            return `file-${nextFileSequence}`;
+        }
+
+        function resetReviewIndex() {
+            reviewIndexByKey = new Map();
+        }
+
+        function getCombinedInvalidItems() {
+            return [...state.reviewItems, ...state.auditItems];
         }
 
         function getSortedBlocklistDomains() {
@@ -513,6 +538,10 @@
             });
         }
 
+        function getFileById(fileId) {
+            return state.files.find(file => file.id === fileId) || null;
+        }
+
         // Reseta o estado da paginação
         function resetPagination() {
             state.pagination.blocklist.currentPage = 1;
@@ -577,8 +606,29 @@
             return 'Auditoria';
         }
 
+        function buildFileStatsSummary(fileObj) {
+            const stats = fileObj?.stats;
+            if (!stats) return null;
+
+            const extractedDomains = Array.isArray(fileObj.extractedDomains) ? fileObj.extractedDomains : [];
+            let whitelistCount = 0;
+            extractedDomains.forEach(domainName => {
+                if (isWhitelisted(domainName)) {
+                    whitelistCount++;
+                }
+            });
+
+            return {
+                recognizedDomains: stats.recognizedDomains || 0,
+                whitelist: whitelistCount,
+                review: (stats.duplicates || 0) + (stats.invalidCandidates || 0),
+                blocklist: Math.max(0, (stats.validDomains || 0) - whitelistCount)
+            };
+        }
+
         function addInvalidAuditEntry({ text, reason, source, line, reviewType }) {
             const suggestedDomain = getReviewSuggestedDomain(text, reason);
+            const isReviewCandidate = reviewType === 'duplicate_in_file' || !!suggestedDomain;
 
             if (reviewType === 'duplicate_in_file' && suggestedDomain && isWhitelisted(suggestedDomain)) {
                 return;
@@ -592,7 +642,7 @@
                     reason || ''
                 ].join('|');
 
-                const existingItem = state.invalidDomains.find(item => item.reviewKey === duplicateKey);
+                const existingItem = reviewIndexByKey.get(duplicateKey) || null;
                 if (existingItem) {
                     existingItem.occurrences = (existingItem.occurrences || 1) + 1;
                     if (line) {
@@ -605,7 +655,7 @@
                 }
             }
 
-            state.invalidDomains.push({
+            const entry = {
                 id: ++invalidAuditSequence,
                 text: String(text ?? ''),
                 reason: reason || 'Motivo não informado',
@@ -619,7 +669,17 @@
                 reviewKey: reviewType === 'duplicate_in_file'
                     ? [reviewType, source || '', suggestedDomain || '', reason || ''].join('|')
                     : ''
-            });
+            };
+
+            if (isReviewCandidate) {
+                state.reviewItems.push(entry);
+                if (entry.reviewKey) {
+                    reviewIndexByKey.set(entry.reviewKey, entry);
+                }
+                return;
+            }
+
+            state.auditItems.push(entry);
         }
 
         // Adiciona um domínio de exceção a partir do input
@@ -680,6 +740,7 @@
             filesArray.forEach(file => {
                 const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
                 const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
+                const fileFingerprint = buildFileFingerprint(file);
 
                 if (!isPdf && !isTxt) {
                     alert(`O arquivo "${file.name}" não é um PDF ou TXT válido.`);
@@ -687,12 +748,14 @@
                 }
                 
                 // Evita processar o mesmo arquivo duas vezes se já estiver na lista
-                if (state.files.some(f => f.name === file.name)) {
+                if (state.files.some(f => f.fileFingerprint === fileFingerprint)) {
                     return;
                 }
 
                 const fileObj = {
+                    id: createFileId(),
                     name: file.name,
+                    fileFingerprint,
                     inputType: isTxt ? 'txt' : 'pdf',
                     status: 'loading',
                     statusMessage: 'Lendo...',
@@ -712,7 +775,7 @@
                         let text = '';
                         if (isPdf) {
                             const typedArray = new Uint8Array(this.result);
-                            text = await extractTextFromPdf(typedArray, file.name, (progMsg) => {
+                            text = await extractTextFromPdf(typedArray, fileObj, (progMsg) => {
                                 fileObj.statusMessage = progMsg;
                                 renderFileList();
                             });
@@ -725,7 +788,7 @@
                         fileObj.statusMessage = '';
                         
                         // Executa extração de domínios sobre o texto
-                        extractDomainsFromText(text, file.name);
+                        extractDomainsFromText(text, fileObj.id);
                         
                         renderFileList();
                         renderTable();
@@ -782,10 +845,11 @@
 
                 let statsHtml = '';
                 if (file.status === 'success' && file.stats) {
+                    const summary = buildFileStatsSummary(file);
                     statsHtml = `
                         <div style="font-size: 0.65rem; color: var(--text-muted); padding-left: 1.25rem; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 0.35rem; display: flex; flex-direction: column; gap: 0.15rem;">
-                            <div>Linhas: <b>${file.stats.totalLines}</b> | Vazias: ${file.stats.emptyLines}</div>
-                            <div>Inválidas: ${file.stats.invalidLines} | Duplicadas: ${file.stats.duplicates}</div>
+                            <div>Lidos: <b>${summary?.recognizedDomains ?? 0}</b> | Whitelist: ${summary?.whitelist ?? 0}</div>
+                            <div>Revisão: ${summary?.review ?? 0} | Bloqueio: ${summary?.blocklist ?? 0}</div>
                         </div>
                     `;
                 }
@@ -814,7 +878,7 @@
         };
 
         // Extrai texto bruto de um PDF usando PDF.js e OCR com Tesseract.js para imagens
-        async function extractTextFromPdf(typedArray, filename, progressCallback) {
+        async function extractTextFromPdf(typedArray, fileObj, progressCallback) {
             const loadingTask = pdfjsLib.getDocument({ data: typedArray });
             const pdf = await loadingTask.promise;
             let fullText = '';
@@ -853,17 +917,17 @@
                         pageText = text;
                         console.log(`Página ${i}: OCR Concluído. Caracteres extraídos: ${pageText.length}`);
                     } catch (ocrErr) {
-                        console.error(`Erro ao executar OCR na página ${i} do arquivo ${filename}:`, ocrErr);
+                        console.error(`Erro ao executar OCR na página ${i} do arquivo ${fileObj.name}:`, ocrErr);
                         const auditEvent = {
                             text: `Página ${i} sem texto OCR recuperável`,
                             reason: 'Falha OCR',
-                            source: filename,
+                            source: fileObj.name,
                             line: `pág. ${i}`
                         };
-                        const auditFile = state.files.find(f => f.name === filename);
-                        if (auditFile) {
-                            auditFile.auditEvents = auditFile.auditEvents || [];
-                            auditFile.auditEvents.push(auditEvent);
+                        const currentFile = getFileById(fileObj.id);
+                        if (currentFile) {
+                            currentFile.auditEvents = currentFile.auditEvents || [];
+                            currentFile.auditEvents.push(auditEvent);
                         }
                         addInvalidAuditEntry(auditEvent);
                     }
@@ -884,13 +948,15 @@
         // Reprocessa todo o texto já extraído caso as opções de limpeza mudem
         function reprocessAllExtractedText() {
             state.domains = getManualDomainsSnapshot();
-            state.invalidDomains = [];
+            state.reviewItems = [];
+            state.auditItems = [];
+            resetReviewIndex();
 
             // Processa novamente o texto bruto de cada arquivo com sucesso
             state.files.forEach(file => {
                 if (file.status === 'success' && file.rawText) {
                     (file.auditEvents || []).forEach(addInvalidAuditEntry);
-                    extractDomainsFromText(file.rawText, file.name);
+                    extractDomainsFromText(file.rawText, file.id);
                 }
             });
 
@@ -902,9 +968,10 @@
         }
 
         // Extrai domínios do texto bruto aplicando as regras de processamento linha por linha
-        function extractDomainsFromText(text, sourceFilename) {
-            const fileObj = state.files.find(f => f.name === sourceFilename);
-            const result = DomainExtractionEngine.extract(text, sourceFilename, state.rules, {
+        function extractDomainsFromText(text, fileId) {
+            const fileObj = getFileById(fileId);
+            const sourceLabel = fileObj?.name || 'Origem desconhecida';
+            const result = DomainExtractionEngine.extract(text, sourceLabel, state.rules, {
                 preferStructuredTxt: fileObj?.inputType === 'txt'
             });
             const stats = result.stats;
@@ -919,11 +986,11 @@
             }
 
             extractedDomains.forEach(domainName => {
-                addDomainToConsolidatedBlocklist(domainName, sourceFilename);
+                addDomainToConsolidatedBlocklist(domainName, sourceLabel);
             });
 
             // Exibe logs detalhados no console
-            console.group(`%cProcessamento de Arquivo: ${sourceFilename}`, 'color: #6366f1; font-weight: bold;');
+            console.group(`%cProcessamento de Arquivo: ${sourceLabel}`, 'color: #6366f1; font-weight: bold;');
             console.log(`Linhas Totais: ${stats.totalLines}`);
             console.log(`Linhas Vazias/Comentários: ${stats.emptyLines}`);
             console.log(`Linhas Inválidas: ${stats.invalidLines}`);
@@ -1017,7 +1084,7 @@
             if (state.activeTab !== 'blocklist' && state.activeTab !== 'whitelist') {
                 document.getElementById('badgeBlocklistCount').innerText = domainList.filter(item => !item.isWhitelisted).length;
                 document.getElementById('badgeWhitelistCount').innerText = domainList.filter(item => item.isWhitelisted).length;
-                document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
+                document.getElementById('badgeInvalidCount').innerText = state.reviewItems.filter(item => item.reviewStatus === 'pending').length;
                 return;
             }
 
@@ -1192,7 +1259,7 @@
             invalidTableBody.innerHTML = '';
 
             const query = state.invalidSearchQuery;
-            let filteredList = state.invalidDomains;
+            let filteredList = getCombinedInvalidItems();
             if (query) {
                 filteredList = filteredList.filter(item => {
                     return item.text.toLowerCase().includes(query) ||
@@ -1212,7 +1279,7 @@
                 });
             }
 
-            const pendingReviewCount = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
+            const pendingReviewCount = state.reviewItems.filter(item => item.reviewStatus === 'pending').length;
 
             if (invalidTotalCount) {
                 invalidTotalCount.innerText = pendingReviewCount;
@@ -1504,7 +1571,7 @@
         };
 
         window.approveReviewItem = function(itemId) {
-            const item = state.invalidDomains.find(entry => entry.id === itemId);
+            const item = state.reviewItems.find(entry => entry.id === itemId);
             if (!item || !item.suggestedDomain || item.reviewStatus !== 'pending') return;
 
             state.manuallyDeletedDomains.delete(item.suggestedDomain);
@@ -1520,7 +1587,7 @@
         };
 
         window.dismissReviewItem = function(itemId) {
-            const item = state.invalidDomains.find(entry => entry.id === itemId);
+            const item = state.reviewItems.find(entry => entry.id === itemId);
             if (!item || item.reviewStatus !== 'pending') return;
 
             item.reviewStatus = 'dismissed';
@@ -1565,11 +1632,11 @@
             const filesCount = state.files.filter(f => f.status === 'success').length;
             statFiles.innerText = filesCount;
 
-            // Domínios Brutos: soma de domínios válidos + duplicados de todos os arquivos de sucesso, mais domínios manuais
+            // Domínios lidos: candidatos reconhecidos como domínio na sessão, mais inclusões manuais.
             let totalRaw = 0;
             state.files.forEach(f => {
                 if (f.status === 'success' && f.stats) {
-                    totalRaw += f.stats.validDomains + f.stats.duplicates;
+                    totalRaw += f.stats.recognizedDomains || 0;
                 }
             });
             const manualCount = Object.values(state.domains).filter(d => d.manual).length;
@@ -1583,7 +1650,7 @@
             const readyCount = domainList.length - filteredCount;
             statExportCount.innerText = readyCount;
 
-            const invalidCount = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
+            const invalidCount = state.reviewItems.filter(item => item.reviewStatus === 'pending').length;
             const badgeInvalidCount = document.getElementById('badgeInvalidCount');
             if (badgeInvalidCount) badgeInvalidCount.innerText = invalidCount;
             if (invalidTotalCount) invalidTotalCount.innerText = invalidCount;
@@ -1595,7 +1662,9 @@
                 state.files = [];
                 state.domains = {};
                 state.manuallyDeletedDomains = new Set();
-                state.invalidDomains = [];
+                state.reviewItems = [];
+                state.auditItems = [];
+                resetReviewIndex();
                 state.invalidSearchQuery = '';
                 state.invalidFilter = 'all';
                 if (invalidSearchBar) invalidSearchBar.value = '';
