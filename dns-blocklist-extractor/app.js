@@ -3,10 +3,12 @@
 
         // Estado do App
         const state = {
-            files: [], // { name: string, status: 'loading' | 'success' | 'error' }
-            domains: {}, // { 'domain.com': { count: 1, source: 'file.pdf', manual: false, isWhitelisted: false, whitelistReason: '' } }
+            files: [], // { name, status, rawText, extractedDomains, stats, ... }
+            domains: {}, // { 'domain.com': { count, source, manual, isWhitelisted, whitelistReason } }
+            manuallyDeletedDomains: new Set(),
             invalidDomains: [], // Auditoria temporária: { id, text, reason, source, line }
             invalidSearchQuery: '',
+            invalidFilter: 'all',
             whitelist: new Set([]),
             searchQuery: '',
             activeTab: 'blocklist', // 'blocklist' | 'whitelist' | 'invalid' | 'compare'
@@ -63,6 +65,7 @@
         const btnClearAll = document.getElementById('btnClearAll');
         const btnAddDomain = document.getElementById('btnAddDomain');
         const invalidSearchBar = document.getElementById('invalidSearchBar');
+        const invalidFilterSelect = document.getElementById('invalidFilterSelect');
         const invalidTableBody = document.getElementById('invalidTableBody');
         const invalidPaginationContainer = document.getElementById('invalidPaginationContainer');
         const invalidTotalCount = document.getElementById('invalidTotalCount');
@@ -330,6 +333,14 @@
                 });
             }
 
+            if (invalidFilterSelect) {
+                invalidFilterSelect.addEventListener('change', (e) => {
+                    state.invalidFilter = e.target.value;
+                    state.pagination.invalid.currentPage = 1;
+                    renderInvalidTable();
+                });
+            }
+
             // Botões de Ações Gerais
             btnClearAll.addEventListener('click', clearAll);
             btnExport.addEventListener('click', exportBlocklist);
@@ -457,6 +468,51 @@
             }
         }
 
+        function addDomainToConsolidatedBlocklist(domainName, sourceFilename, { manual = false } = {}) {
+            if (!manual && state.manuallyDeletedDomains.has(domainName)) {
+                return false;
+            }
+
+            const existingDomain = state.domains[domainName];
+            if (existingDomain) {
+                existingDomain.count++;
+                return false;
+            }
+
+            state.domains[domainName] = {
+                count: 1,
+                source: sourceFilename,
+                manual,
+                isWhitelisted: false,
+                whitelistReason: ''
+            };
+            updateDomainWhitelistStatus(domainName);
+            return true;
+        }
+
+        function getManualDomainsSnapshot() {
+            const manualDomains = {};
+            for (const domainName in state.domains) {
+                if (state.domains[domainName].manual) {
+                    manualDomains[domainName] = { ...state.domains[domainName] };
+                }
+            }
+            return manualDomains;
+        }
+
+        function rebuildConsolidatedDomainsFromFiles() {
+            const manualDomains = getManualDomainsSnapshot();
+            state.domains = { ...manualDomains };
+
+            state.files.forEach(file => {
+                if (file.status !== 'success' || !Array.isArray(file.extractedDomains)) return;
+
+                file.extractedDomains.forEach(domainName => {
+                    addDomainToConsolidatedBlocklist(domainName, file.name);
+                });
+            });
+        }
+
         // Reseta o estado da paginação
         function resetPagination() {
             state.pagination.blocklist.currentPage = 1;
@@ -474,13 +530,95 @@
             }[char]));
         }
 
-        function addInvalidAuditEntry({ text, reason, source, line }) {
+        function getReviewSuggestedDomain(text, reason) {
+            const blockedReasons = [
+                'Linha vazia',
+                'Comentário removido',
+                'Falha OCR',
+                'Identificador processual/judicial descartado',
+                'E-mail descartado pelas regras',
+                'IP local/loopback ignorado',
+                'Hostname numérico sem domínio'
+            ];
+
+            if (blockedReasons.includes(reason)) return '';
+
+            const cleanResult = DomainExtractionEngine.cleanDomainCandidate(String(text ?? ''), {
+                ...state.rules,
+                skipEmails: true
+            });
+
+            if (!cleanResult.domain) return '';
+            return cleanResult.domain;
+        }
+
+        function getReviewStatusLabel(item) {
+            if (item.reviewStatus === 'approved') return 'Aprovado';
+            if (item.reviewStatus === 'dismissed') return 'Descartado';
+            return item.suggestedDomain ? 'Pendente' : 'Somente auditoria';
+        }
+
+        function getReviewContext(item) {
+            if (item.reviewType === 'duplicate_in_file' || String(item.reason || '').startsWith('Duplicado:')) {
+                return 'duplicate';
+            }
+            if (item.reviewStatus === 'approved') return 'approved';
+            if (item.reviewStatus === 'dismissed') return 'dismissed';
+            if (item.suggestedDomain) return 'suggested';
+            return 'audit';
+        }
+
+        function getReviewContextLabel(item) {
+            const context = getReviewContext(item);
+            if (context === 'duplicate') return 'Duplicado';
+            if (context === 'approved') return 'Aprovado';
+            if (context === 'dismissed') return 'Descartado';
+            if (context === 'suggested') return 'Duvidoso';
+            return 'Auditoria';
+        }
+
+        function addInvalidAuditEntry({ text, reason, source, line, reviewType }) {
+            const suggestedDomain = getReviewSuggestedDomain(text, reason);
+
+            if (reviewType === 'duplicate_in_file' && suggestedDomain && isWhitelisted(suggestedDomain)) {
+                return;
+            }
+
+            if (reviewType === 'duplicate_in_file') {
+                const duplicateKey = [
+                    reviewType,
+                    source || '',
+                    suggestedDomain || '',
+                    reason || ''
+                ].join('|');
+
+                const existingItem = state.invalidDomains.find(item => item.reviewKey === duplicateKey);
+                if (existingItem) {
+                    existingItem.occurrences = (existingItem.occurrences || 1) + 1;
+                    if (line) {
+                        const lineLabel = String(line);
+                        if (!existingItem.lineDetails.includes(lineLabel)) {
+                            existingItem.lineDetails.push(lineLabel);
+                        }
+                    }
+                    return;
+                }
+            }
+
             state.invalidDomains.push({
                 id: ++invalidAuditSequence,
                 text: String(text ?? ''),
                 reason: reason || 'Motivo não informado',
                 source: source || 'Origem desconhecida',
-                line: line || ''
+                line: line || '',
+                lineDetails: line ? [String(line)] : [],
+                occurrences: 1,
+                suggestedDomain,
+                reviewType: reviewType || '',
+                reviewStatus: suggestedDomain ? 'pending' : 'info',
+                reviewKey: reviewType === 'duplicate_in_file'
+                    ? [reviewType, source || '', suggestedDomain || '', reason || ''].join('|')
+                    : ''
             });
         }
 
@@ -555,10 +693,12 @@
 
                 const fileObj = {
                     name: file.name,
+                    inputType: isTxt ? 'txt' : 'pdf',
                     status: 'loading',
                     statusMessage: 'Lendo...',
                     rawText: '', // Salvaremos o texto bruto para permitir re-processamento com regras diferentes
-                    auditEvents: []
+                    auditEvents: [],
+                    extractedDomains: []
                 };
                 
                 state.files.push(fileObj);
@@ -743,16 +883,7 @@
 
         // Reprocessa todo o texto já extraído caso as opções de limpeza mudem
         function reprocessAllExtractedText() {
-            // Guarda domínios manuais
-            const manualDomains = {};
-            for (const d in state.domains) {
-                if (state.domains[d].manual) {
-                    manualDomains[d] = state.domains[d];
-                }
-            }
-
-            // Reseta domínios
-            state.domains = { ...manualDomains };
+            state.domains = getManualDomainsSnapshot();
             state.invalidDomains = [];
 
             // Processa novamente o texto bruto de cada arquivo com sucesso
@@ -763,7 +894,7 @@
                 }
             });
 
-            updateAllDomainsWhitelistStatus();
+            rebuildConsolidatedDomainsFromFiles();
             resetPagination();
             renderTable();
             renderInvalidTable();
@@ -773,30 +904,23 @@
         // Extrai domínios do texto bruto aplicando as regras de processamento linha por linha
         function extractDomainsFromText(text, sourceFilename) {
             const fileObj = state.files.find(f => f.name === sourceFilename);
-            const result = DomainExtractionEngine.extract(text, sourceFilename, state.rules);
+            const result = DomainExtractionEngine.extract(text, sourceFilename, state.rules, {
+                preferStructuredTxt: fileObj?.inputType === 'txt'
+            });
             const stats = result.stats;
+            const extractedDomains = result.domains.map(item => item.domain);
 
             result.invalids.forEach(addInvalidAuditEntry);
-
-            result.domains.forEach(item => {
-                const finalDomain = item.domain;
-                if (state.domains[finalDomain]) {
-                    state.domains[finalDomain].count++;
-                } else {
-                    state.domains[finalDomain] = {
-                        count: 1,
-                        source: sourceFilename,
-                        manual: false,
-                        isWhitelisted: false,
-                        whitelistReason: ''
-                    };
-                    updateDomainWhitelistStatus(finalDomain);
-                }
-            });
+            (result.reviewItems || []).forEach(addInvalidAuditEntry);
 
             if (fileObj) {
                 fileObj.stats = stats;
+                fileObj.extractedDomains = extractedDomains;
             }
+
+            extractedDomains.forEach(domainName => {
+                addDomainToConsolidatedBlocklist(domainName, sourceFilename);
+            });
 
             // Exibe logs detalhados no console
             console.group(`%cProcessamento de Arquivo: ${sourceFilename}`, 'color: #6366f1; font-weight: bold;');
@@ -893,7 +1017,7 @@
             if (state.activeTab !== 'blocklist' && state.activeTab !== 'whitelist') {
                 document.getElementById('badgeBlocklistCount').innerText = domainList.filter(item => !item.isWhitelisted).length;
                 document.getElementById('badgeWhitelistCount').innerText = domainList.filter(item => item.isWhitelisted).length;
-                document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.length;
+                document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
                 return;
             }
 
@@ -1072,25 +1196,37 @@
             if (query) {
                 filteredList = filteredList.filter(item => {
                     return item.text.toLowerCase().includes(query) ||
+                        (item.suggestedDomain || '').toLowerCase().includes(query) ||
                         item.reason.toLowerCase().includes(query) ||
                         item.source.toLowerCase().includes(query) ||
-                        String(item.line).toLowerCase().includes(query);
+                        String(item.line).toLowerCase().includes(query) ||
+                        getReviewStatusLabel(item).toLowerCase().includes(query);
                 });
             }
 
-            if (invalidTotalCount) {
-                invalidTotalCount.innerText = state.invalidDomains.length;
+            if (state.invalidFilter !== 'all') {
+                filteredList = filteredList.filter(item => {
+                    const context = getReviewContext(item);
+                    if (state.invalidFilter === 'pending') return item.reviewStatus === 'pending';
+                    return context === state.invalidFilter;
+                });
             }
-            document.getElementById('badgeInvalidCount').innerText = state.invalidDomains.length;
+
+            const pendingReviewCount = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
+
+            if (invalidTotalCount) {
+                invalidTotalCount.innerText = pendingReviewCount;
+            }
+            document.getElementById('badgeInvalidCount').innerText = pendingReviewCount;
 
             if (filteredList.length === 0) {
                 invalidTableBody.innerHTML = `
                     <tr>
-                        <td colspan="4">
+                        <td colspan="5">
                             <div class="empty-state">
                                 <svg class="empty-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                                <h3>Nenhum inválido encontrado</h3>
-                                <p>${query ? 'Tente ajustar sua busca.' : 'Os descartes por invalidação aparecerão aqui durante o processamento.'}</p>
+                                <h3>Nenhum item de revisão encontrado</h3>
+                                <p>${query ? 'Tente ajustar sua busca.' : 'Os itens duvidosos e registros de auditoria aparecerão aqui durante o processamento.'}</p>
                             </div>
                         </td>
                     </tr>
@@ -1113,15 +1249,55 @@
             paginatedItems.forEach(item => {
                 const tr = document.createElement('tr');
                 const safeText = escapeHtml(item.text);
+                const safeSuggested = escapeHtml(item.suggestedDomain || '-');
                 const safeReason = escapeHtml(item.reason);
                 const safeSource = escapeHtml(item.source);
                 const safeLine = escapeHtml(item.line || '-');
+                const safeLines = escapeHtml(item.lineDetails?.join(', ') || safeLine);
+                const statusLabel = getReviewStatusLabel(item);
+                const safeStatus = escapeHtml(statusLabel);
+                const safeContext = escapeHtml(getReviewContextLabel(item));
+                const occurrences = Number(item.occurrences || 1);
+                const occurrencesHtml = occurrences > 1
+                    ? `<span class="count-badge" style="margin-top:0.25rem;">${occurrences} ocorrências</span>`
+                    : '';
+                const hasSuggestion = !!item.suggestedDomain;
+                const canApprove = hasSuggestion && item.reviewStatus === 'pending';
+                const canDismiss = item.reviewStatus === 'pending';
+
+                const statusColor = item.reviewStatus === 'approved'
+                    ? 'var(--accent-green)'
+                    : item.reviewStatus === 'dismissed'
+                        ? '#fda4af'
+                        : hasSuggestion
+                            ? 'var(--accent-cyan)'
+                            : 'var(--text-muted)';
 
                 tr.innerHTML = `
                     <td><div class="invalid-original-cell" title="${safeText}">${safeText}</div></td>
+                    <td>
+                        <div style="display:flex; flex-direction:column; gap:0.35rem;">
+                            <span class="domain-name" style="color:#fff; font-size:0.8rem;">${safeSuggested}</span>
+                            <span style="font-size:0.7rem; color:${statusColor}; font-weight:600;">${safeStatus}</span>
+                            <span style="font-size:0.7rem; color:var(--text-muted);">${safeContext}</span>
+                        </div>
+                    </td>
                     <td><span class="invalid-reason-badge">${safeReason}</span></td>
-                    <td><div class="source-cell" title="${safeSource}">${safeSource}</div></td>
-                    <td style="text-align: center;"><span class="line-badge">${safeLine}</span></td>
+                    <td>
+                        <div class="source-cell" title="${safeSource}">${safeSource}</div>
+                        <div style="margin-top:0.25rem; font-size:0.7rem; color:var(--text-muted);">Linha(s): ${safeLines}</div>
+                        ${occurrencesHtml}
+                    </td>
+                    <td>
+                        <div class="actions-cell" style="justify-content:center; gap:0.45rem;">
+                            <button class="action-icon-btn whitelist" onclick="approveReviewItem(${item.id})" title="Adicionar sugestão à lista final" ${canApprove ? '' : 'disabled style="opacity:0.35; cursor:not-allowed;"'}>
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 6 9 17l-5-5"></path></svg>
+                            </button>
+                            <button class="action-icon-btn delete" onclick="dismissReviewItem(${item.id})" title="Descartar item da revisão" ${canDismiss ? '' : 'disabled style="opacity:0.35; cursor:not-allowed;"'}>
+                                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                        </div>
+                    </td>
                 `;
                 invalidTableBody.appendChild(tr);
             });
@@ -1134,14 +1310,14 @@
 
             if (totalPages <= 1) {
                 invalidPaginationContainer.innerHTML = `
-                    <div>Mostrando todos os <b>${totalItems}</b> inválidos</div>
+                    <div>Mostrando todos os <b>${totalItems}</b> itens de revisão</div>
                     <div></div>
                 `;
                 return;
             }
 
             const infoDiv = document.createElement('div');
-            infoDiv.innerHTML = `Mostrando <b>${startItem}-${endItem}</b> de <b>${totalItems}</b> inválidos`;
+            infoDiv.innerHTML = `Mostrando <b>${startItem}-${endItem}</b> de <b>${totalItems}</b> itens de revisão`;
             invalidPaginationContainer.appendChild(infoDiv);
 
             const buttonsDiv = document.createElement('div');
@@ -1287,6 +1463,8 @@
 
             const oldData = state.domains[oldDomain];
             delete state.domains[oldDomain];
+            state.manuallyDeletedDomains.add(oldDomain);
+            state.manuallyDeletedDomains.delete(newDomain);
             state.domains[newDomain] = oldData;
             
             updateDomainWhitelistStatus(newDomain);
@@ -1319,8 +1497,34 @@
 
         // Exclui um domínio da listagem
         window.deleteDomain = function(domain) {
+            state.manuallyDeletedDomains.add(domain);
             delete state.domains[domain];
             renderTable();
+            updateStats();
+        };
+
+        window.approveReviewItem = function(itemId) {
+            const item = state.invalidDomains.find(entry => entry.id === itemId);
+            if (!item || !item.suggestedDomain || item.reviewStatus !== 'pending') return;
+
+            state.manuallyDeletedDomains.delete(item.suggestedDomain);
+            if (!state.domains[item.suggestedDomain]) {
+                addDomainToConsolidatedBlocklist(item.suggestedDomain, `Revisão: ${item.source}`, { manual: true });
+            }
+            item.reviewStatus = 'approved';
+
+            resetPagination();
+            renderTable();
+            renderInvalidTable();
+            updateStats();
+        };
+
+        window.dismissReviewItem = function(itemId) {
+            const item = state.invalidDomains.find(entry => entry.id === itemId);
+            if (!item || item.reviewStatus !== 'pending') return;
+
+            item.reviewStatus = 'dismissed';
+            renderInvalidTable();
             updateStats();
         };
 
@@ -1343,18 +1547,12 @@
                 return;
             }
             const clean = cleanResult.domain;
+            state.manuallyDeletedDomains.delete(clean);
 
             if (state.domains[clean]) {
                 state.domains[clean].count++;
             } else {
-                state.domains[clean] = {
-                    count: 1,
-                    source: 'Adicionado Manualmente',
-                    manual: true,
-                    isWhitelisted: false,
-                    whitelistReason: ''
-                };
-                updateDomainWhitelistStatus(clean);
+                addDomainToConsolidatedBlocklist(clean, 'Adicionado Manualmente', { manual: true });
             }
 
             resetPagination();
@@ -1385,7 +1583,7 @@
             const readyCount = domainList.length - filteredCount;
             statExportCount.innerText = readyCount;
 
-            const invalidCount = state.invalidDomains.length;
+            const invalidCount = state.invalidDomains.filter(item => item.reviewStatus === 'pending').length;
             const badgeInvalidCount = document.getElementById('badgeInvalidCount');
             if (badgeInvalidCount) badgeInvalidCount.innerText = invalidCount;
             if (invalidTotalCount) invalidTotalCount.innerText = invalidCount;
@@ -1396,9 +1594,12 @@
             if (confirm("Deseja realmente limpar todos os arquivos e domínios carregados?")) {
                 state.files = [];
                 state.domains = {};
+                state.manuallyDeletedDomains = new Set();
                 state.invalidDomains = [];
                 state.invalidSearchQuery = '';
+                state.invalidFilter = 'all';
                 if (invalidSearchBar) invalidSearchBar.value = '';
+                if (invalidFilterSelect) invalidFilterSelect.value = 'all';
                 renderFileList();
                 resetPagination();
                 renderTable();

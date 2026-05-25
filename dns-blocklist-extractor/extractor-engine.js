@@ -218,11 +218,72 @@
         };
     }
 
-    function extract(text, sourceFilename, rulesInput) {
+    function stripCommentFromLine(line) {
+        const trimmedLine = String(line || '').trim();
+        const commentIndex = trimmedLine.search(COMMENT_REGEX);
+        let clean = trimmedLine;
+        let commentText = '';
+
+        if (commentIndex !== -1) {
+            commentText = clean.substring(commentIndex);
+            clean = clean.substring(0, commentIndex).trim();
+        }
+
+        return { clean, commentText };
+    }
+
+    function stripIpPrefix(value) {
+        let clean = String(value || '').trim();
+        const ipMatch = clean.match(IP_PREFIX_REGEX);
+        if (ipMatch) {
+            clean = clean.substring(ipMatch[0].length).trim();
+        }
+        return clean;
+    }
+
+    function normalizeLiteralListEntry(value) {
+        return String(value || '')
+            .replace(/^\uFEFF/, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function looksLikeTrustedListEntry(value) {
+        const candidate = normalizeLiteralListEntry(value);
+        if (!candidate || /\s/.test(candidate)) return false;
+        if (candidate.includes('@')) return false;
+        if (candidate.length > 255) return false;
+        return candidate.includes('.') || candidate === 'localhost';
+    }
+
+    function shouldPreferStructuredTxtMode(text) {
+        const lines = String(text || '').split(/\r?\n/);
+        let inspected = 0;
+        let structuredLike = 0;
+
+        for (const line of lines) {
+            const stripped = stripCommentFromLine(line);
+            let clean = stripIpPrefix(stripped.clean);
+            if (!clean) continue;
+
+            inspected++;
+            if (!/\s/.test(clean) && clean.length <= 255) {
+                structuredLike++;
+            }
+
+            if (inspected >= 250) break;
+        }
+
+        if (inspected === 0) return false;
+        return (structuredLike / inspected) >= 0.9;
+    }
+
+    function extractStructuredTxt(text, sourceFilename, rulesInput) {
         const rules = normalizeRules(rulesInput);
         const stats = createStats();
         const domains = [];
         const invalids = [];
+        const reviewItems = [];
         const seenInFile = new Set();
         const lines = String(text || '').split(/\r?\n/);
 
@@ -239,6 +300,145 @@
                 reason,
                 source: sourceFilename,
                 line
+            });
+        }
+
+        function addReview(line, originalText, reason, reviewType) {
+            reviewItems.push({
+                text: originalText,
+                reason,
+                source: sourceFilename,
+                line,
+                reviewType
+            });
+        }
+
+        lines.forEach((line, index) => {
+            const lineNum = index + 1;
+            const stripped = stripCommentFromLine(line);
+            let clean = stripIpPrefix(stripped.clean);
+
+            if (!clean) {
+                stats.emptyLines++;
+                addRemoved(lineNum, line, stripped.commentText ? 'Comentário removido' : 'Linha vazia');
+                return;
+            }
+
+            // Em listas TXT estruturadas, preferimos tratar linhas simples literalmente.
+            // Quando a linha vier com ruído ou múltiplos tokens, caímos para a extração clássica
+            // para não perder domínios que antes eram aceitos pelo motor geral.
+            const lineLooksLiteral = !/\s/.test(clean);
+
+            if (lineLooksLiteral) {
+                const cleanResult = cleanDomainCandidate(clean, rulesInput);
+                if (cleanResult.domain) {
+                    const finalDomain = cleanResult.domain;
+                    if (seenInFile.has(finalDomain)) {
+                        stats.duplicates++;
+                        addRemoved(lineNum, clean, `Duplicado: ${finalDomain}`);
+                        addReview(lineNum, clean, `Duplicado: ${finalDomain}`, 'duplicate_in_file');
+                        return;
+                    }
+
+                    seenInFile.add(finalDomain);
+                    stats.validDomains++;
+                    domains.push({ domain: finalDomain, source: sourceFilename, line: lineNum, original: clean });
+                    return;
+                }
+
+                if (looksLikeTrustedListEntry(clean)) {
+                    const finalDomain = normalizeLiteralListEntry(clean);
+                    if (seenInFile.has(finalDomain)) {
+                        stats.duplicates++;
+                        addRemoved(lineNum, clean, `Duplicado: ${finalDomain}`);
+                        addReview(lineNum, clean, `Duplicado: ${finalDomain}`, 'duplicate_in_file');
+                        return;
+                    }
+
+                    seenInFile.add(finalDomain);
+                    stats.validDomains++;
+                    domains.push({ domain: finalDomain, source: sourceFilename, line: lineNum, original: clean });
+                    return;
+                }
+            }
+
+            const matches = collectMatches(clean);
+            if (matches.length === 0) {
+                const cleanResult = cleanDomainCandidate(clean, rulesInput);
+                stats.invalidLines++;
+                addInvalid(lineNum, clean, cleanResult.reason || 'Nenhum padrão de domínio ou IP encontrado');
+                return;
+            }
+
+            let lineProducedDomain = false;
+            matches.forEach(match => {
+                const cleanResult = cleanDomainCandidate(match.candidate, rulesInput);
+                if (!cleanResult.domain) {
+                    stats.invalidLines++;
+                    addInvalid(lineNum, match.candidate, cleanResult.reason || 'Limpeza descartou domínio');
+                    return;
+                }
+
+                const finalDomain = cleanResult.domain;
+                if (match.isEmail && rules.skipEmails && !getAutoWhitelistReason(finalDomain, rules)) {
+                    addInvalid(lineNum, match.original, 'E-mail descartado pelas regras');
+                    return;
+                }
+
+                if (seenInFile.has(finalDomain)) {
+                    stats.duplicates++;
+                    addRemoved(lineNum, match.candidate, `Duplicado: ${finalDomain}`);
+                    addReview(lineNum, match.candidate, `Duplicado: ${finalDomain}`, 'duplicate_in_file');
+                    return;
+                }
+
+                seenInFile.add(finalDomain);
+                stats.validDomains++;
+                lineProducedDomain = true;
+                domains.push({ domain: finalDomain, source: sourceFilename, line: lineNum, original: match.candidate });
+            });
+
+        });
+
+        return { domains, invalids, reviewItems, stats };
+    }
+
+    function extract(text, sourceFilename, rulesInput, options = {}) {
+        if (options.preferStructuredTxt && shouldPreferStructuredTxtMode(text)) {
+            return extractStructuredTxt(text, sourceFilename, rulesInput);
+        }
+
+        const rules = normalizeRules(rulesInput);
+        const stats = createStats();
+        const domains = [];
+        const invalids = [];
+        const reviewItems = [];
+        const seenInFile = new Set();
+        const lines = String(text || '').split(/\r?\n/);
+
+        stats.totalLines = lines.length;
+
+        function addRemoved(line, originalText, reason) {
+            stats.removedDetails.push({ line, text: originalText, reason });
+        }
+
+        function addInvalid(line, originalText, reason) {
+            addRemoved(line, originalText, reason);
+            invalids.push({
+                text: originalText,
+                reason,
+                source: sourceFilename,
+                line
+            });
+        }
+
+        function addReview(line, originalText, reason, reviewType) {
+            reviewItems.push({
+                text: originalText,
+                reason,
+                source: sourceFilename,
+                line,
+                reviewType
             });
         }
 
@@ -298,6 +498,7 @@
                 if (seenInFile.has(finalDomain)) {
                     stats.duplicates++;
                     addRemoved(lineNum, candidate, `Duplicado: ${finalDomain}`);
+                    addReview(lineNum, candidate, `Duplicado: ${finalDomain}`, 'duplicate_in_file');
                     return;
                 }
 
@@ -307,7 +508,7 @@
             });
         });
 
-        return { domains, invalids, stats };
+        return { domains, invalids, reviewItems, stats };
     }
 
     global.DomainExtractionEngine = {

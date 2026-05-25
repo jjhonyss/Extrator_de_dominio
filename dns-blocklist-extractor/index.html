@@ -178,7 +178,7 @@
                         <span class="tab-badge" id="badgeWhitelistCount">0</span>
                     </button>
                     <button class="tab-btn invalid-tab" id="tabInvalidBtn" onclick="switchTab('invalid')">
-                        Inválidos
+                        Revisão
                         <span class="tab-badge" id="badgeInvalidCount">0</span>
                     </button>
                     <button class="tab-btn" id="tabCompareBtn" onclick="switchTab('compare')">
@@ -239,15 +239,24 @@
                     </div>
                 </div>
 
-                <!-- Bloco de Auditoria de Inválidos -->
+                <!-- Bloco de Revisão e Auditoria -->
                 <div id="invalidTabContent" style="display: none; flex-direction: column; flex: 1;">
                     <div class="table-toolbar">
                         <div class="search-container">
                             <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                            <input type="text" id="invalidSearchBar" class="search-input" placeholder="Pesquisar texto, motivo, origem ou linha...">
+                            <input type="text" id="invalidSearchBar" class="search-input" placeholder="Pesquisar texto, sugestão, motivo, origem ou linha...">
                         </div>
+                        <select id="invalidFilterSelect" class="search-input" style="max-width: 220px;">
+                            <option value="all">Todos os contextos</option>
+                            <option value="pending">Pendentes</option>
+                            <option value="duplicate">Duplicados</option>
+                            <option value="suggested">Duvidosos</option>
+                            <option value="audit">Somente auditoria</option>
+                            <option value="approved">Aprovados</option>
+                            <option value="dismissed">Descartados</option>
+                        </select>
                         <div style="font-size: 0.8rem; color: var(--text-muted);">
-                            Total de inválidos: <b id="invalidTotalCount" style="color:#fda4af;">0</b>
+                            Pendentes de revisão: <b id="invalidTotalCount" style="color:#fda4af;">0</b>
                         </div>
                     </div>
 
@@ -255,10 +264,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th style="width: 42%;">Domínio/Texto Original</th>
-                                    <th style="width: 24%;">Motivo da Invalidação</th>
-                                    <th style="width: 24%;">Origem</th>
-                                    <th style="width: 10%; text-align: center;">Linha</th>
+                                    <th style="width: 30%;">Texto Original</th>
+                                    <th style="width: 20%;">Sugestão / Status</th>
+                                    <th style="width: 22%;">Motivo</th>
+                                    <th style="width: 18%;">Origem</th>
+                                    <th style="width: 10%; text-align: center;">Ações</th>
                                 </tr>
                             </thead>
                             <tbody id="invalidTableBody">
@@ -380,6 +390,6 @@
         Ferramenta de Bloqueio DNS &copy; 2026. Processamento local seguro por meio do seu navegador.
     </footer>
 
-    <script src="app.js?v=20260524-4"></script>
+    <script src="app.js?v=20260524-7"></script>
 </body>
 </html>
