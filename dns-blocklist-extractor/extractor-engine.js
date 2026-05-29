@@ -6,6 +6,7 @@
     const IP_PREFIX_REGEX = /^(?:(?:\d{1,3}\.){3}\d{1,3}|\[[a-fA-F0-9:]+\]|(?:[a-fA-F0-9]{1,4}:){2,}[a-fA-F0-9:]{0,})\s+/;
     const COMMENT_REGEX = /(?:^|\s)(?:#|;|\/\/)/;
     const JUDICIAL_CASE_REGEX = /^\d{4,7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}$/;
+    const DIGITAL_SIGNATURE_LINE_REGEX = /(documento\s+assinado|assinado\s+digitalmente|assinatura\s+digital|certificado\s+digital|icp-?brasil|mp\s*2\.200-2|c[óo]digo\s+verificador|c[óo]digo\s+crc|hash\s+do\s+documento|autenticidade\s+do\s+documento|valida[çc][ãa]o\s+do\s+documento|validar\s+documento|verifique\s+em|certisign|serpro)/iu;
     const OCR_TRUNCATED_TLD_REPAIRS = {
         inf: 'info',
         onli: 'online'
@@ -62,9 +63,13 @@
         return null;
     }
 
-    function isValidDomainName(domain) {
-        const domainRegex = /^(?:[\p{L}0-9](?:[\p{L}0-9-]{0,61}[\p{L}0-9])?\.)+[\p{L}0-9-]{2,24}$/iu;
-        const blockableMalformedDomainRegex = /^(?:[\p{L}0-9][\p{L}0-9-]{0,62}\.)+[\p{L}0-9-]{2,24}$/iu;
+    function isValidDomainName(domain, options = {}) {
+        const allowRelaxedTerminalLabel = options?.allowRelaxedTerminalLabel === true;
+        const terminalLabelPattern = allowRelaxedTerminalLabel
+            ? '[\\p{L}0-9-]{1,63}'
+            : '[\\p{L}0-9-]{2,24}';
+        const domainRegex = new RegExp(`^(?:[\\p{L}0-9](?:[\\p{L}0-9-]{0,61}[\\p{L}0-9])?\\.)+${terminalLabelPattern}$`, 'iu');
+        const blockableMalformedDomainRegex = new RegExp(`^(?:[\\p{L}0-9][\\p{L}0-9-]{0,62}\\.)+${terminalLabelPattern}$`, 'iu');
         const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
         const hostnameRegex = /^[\p{L}0-9](?:[\p{L}0-9-]{1,62})$/iu;
         return domainRegex.test(domain) || blockableMalformedDomainRegex.test(domain) || ipRegex.test(domain) || hostnameRegex.test(domain);
@@ -103,6 +108,10 @@
         return false;
     }
 
+    function looksLikeDigitalSignatureLine(value) {
+        return DIGITAL_SIGNATURE_LINE_REGEX.test(String(value || '').trim());
+    }
+
     function repairTruncatedOcrDomain(value) {
         const candidate = String(value || '').trim().toLowerCase();
         const parts = candidate.split('.').filter(Boolean);
@@ -132,25 +141,66 @@
         return hasLetterAndNumber || hasHyphen || hasMaliciousKeyword;
     }
 
+    function isDomainTokenContinuationChar(char) {
+        return !!char && /[\p{L}0-9.-]/u.test(char);
+    }
+
+    function isEmbeddedDomainMatch(text, startIndex, endIndex) {
+        const source = String(text || '');
+        const prevChar = startIndex > 0 ? source[startIndex - 1] : '';
+        const nextChar = endIndex < source.length ? source[endIndex] : '';
+        return isDomainTokenContinuationChar(prevChar) || isDomainTokenContinuationChar(nextChar);
+    }
+
+    function stripTokenOuterNoise(value) {
+        return String(value || '').trim().replace(/^[^\p{L}0-9]+|[^\p{L}0-9/#?=&._-]+$/gu, '');
+    }
+
+    function isEmbeddedInsideLargerToken(text, candidate) {
+        const normalizedCandidate = String(candidate || '').trim().toLowerCase();
+        if (!normalizedCandidate || !normalizedCandidate.includes('.')) return false;
+
+        const tokens = String(text || '').split(/\s+/).map(stripTokenOuterNoise).filter(Boolean);
+        return tokens.some(token => {
+            const normalizedToken = token.toLowerCase();
+            if (normalizedToken.length <= normalizedCandidate.length) return false;
+
+            const candidateIndex = normalizedToken.indexOf(normalizedCandidate);
+            if (candidateIndex === -1) return false;
+
+            const prevChar = candidateIndex > 0 ? normalizedToken[candidateIndex - 1] : '';
+            const nextIndex = candidateIndex + normalizedCandidate.length;
+            const nextChar = nextIndex < normalizedToken.length ? normalizedToken[nextIndex] : '';
+            return isDomainTokenContinuationChar(prevChar) || isDomainTokenContinuationChar(nextChar);
+        });
+    }
+
     function collectMatches(clean) {
         EMAIL_OR_DOMAIN_OR_IP_REGEX.lastIndex = 0;
-        const matches = Array.from(clean.matchAll(EMAIL_OR_DOMAIN_OR_IP_REGEX)).map(match => ({
-            isEmail: !!match[1],
-            candidate: match[2],
-            original: match[0]
-        }));
+        const matches = Array.from(clean.matchAll(EMAIL_OR_DOMAIN_OR_IP_REGEX))
+            .filter(match => !isEmbeddedDomainMatch(clean, match.index || 0, (match.index || 0) + String(match[0] || '').length))
+            .filter(match => !isEmbeddedInsideLargerToken(clean, match[2] || match[0]))
+            .map(match => ({
+                isEmail: !!match[1],
+                candidate: match[2],
+                original: match[0]
+            }));
 
         if (matches.length > 0) return matches;
 
         FALLBACK_TOKEN_REGEX.lastIndex = 0;
         return Array.from(clean.matchAll(FALLBACK_TOKEN_REGEX))
+            .filter(match => !isEmbeddedDomainMatch(clean, match.index || 0, (match.index || 0) + String(match[0] || '').length))
+            .filter(match => !isEmbeddedInsideLargerToken(clean, match[0]))
             .map(match => match[0])
             .filter(token => isClearSingleLabelCandidate(token, clean))
             .map(token => ({ isEmail: false, candidate: token, original: token }));
     }
 
-    function cleanDomainCandidate(str, rulesInput) {
+    function cleanDomainCandidate(str, rulesInput, options = {}) {
         const rules = normalizeRules(rulesInput);
+        const allowRelaxedTerminalLabel = options?.allowRelaxedTerminalLabel === true;
+        const allowOcrTldRepair = options?.allowOcrTldRepair !== false;
         let d = String(str || '').trim().toLowerCase();
 
         if (d.includes('@')) {
@@ -164,7 +214,7 @@
         d = d.split(/[\/\?#:]/)[0];
         d = d.replace(/^[.+]+|[.+]+$/g, '');
 
-        if (isLikelyTruncatedOcrDomain(d)) {
+        if (allowOcrTldRepair && isLikelyTruncatedOcrDomain(d)) {
             d = repairTruncatedOcrDomain(d);
         }
 
@@ -188,7 +238,7 @@
             }
         }
 
-        if (!isValidDomainName(d)) {
+        if (!isValidDomainName(d, options)) {
             return { domain: null, reason: 'Estrutura de domínio/IP inválida' };
         }
 
@@ -200,11 +250,41 @@
         if (parts.length === 1 && /^[0-9]+$/.test(d)) {
             return { domain: null, reason: 'Hostname numérico sem domínio' };
         }
-        if (parts.length > 1 && parts[parts.length - 1].length < 2) {
+        if (!allowRelaxedTerminalLabel && parts.length > 1 && parts[parts.length - 1].length < 2) {
             return { domain: null, reason: 'Domínio sem extensão ou extensão muito curta' };
         }
 
         return { domain: d, reason: null };
+    }
+
+    function cleanStructuredTxtCandidate(str, rulesInput, options = {}) {
+        const rawValue = String(str || '').trim().toLowerCase();
+        if (!rawValue.includes('/')) {
+            return cleanDomainCandidate(rawValue, rulesInput, options);
+        }
+
+        const normalizedValue = rawValue
+            .replace(/^https?:\/\//, '')
+            .replace(/^[.+]+|[.+]+$/g, '');
+
+        const slashIndex = normalizedValue.indexOf('/');
+        if (slashIndex === -1) {
+            return cleanDomainCandidate(normalizedValue, rulesInput, options);
+        }
+
+        const hostPart = normalizedValue.substring(0, slashIndex);
+        const pathPart = normalizedValue.substring(slashIndex);
+        const hostResult = cleanDomainCandidate(hostPart, rulesInput, options);
+
+        if (!hostResult.domain) {
+            return hostResult;
+        }
+
+        if (!/^\/[^\s?#]+$/u.test(pathPart)) {
+            return { domain: null, reason: 'Caminho inválido após o domínio' };
+        }
+
+        return { domain: `${hostResult.domain}${pathPart}`, reason: null };
     }
 
     function createStats() {
@@ -267,6 +347,10 @@
 
     function extractStructuredTxt(text, sourceFilename, rulesInput) {
         const rules = normalizeRules(rulesInput);
+        const cleanOptions = {
+            allowRelaxedTerminalLabel: true,
+            allowOcrTldRepair: false
+        };
         const stats = createStats();
         const domains = [];
         const invalids = [];
@@ -317,7 +401,7 @@
             const lineLooksLiteral = !/\s/.test(clean);
 
             if (lineLooksLiteral) {
-                const cleanResult = cleanDomainCandidate(clean, rulesInput);
+                const cleanResult = cleanStructuredTxtCandidate(clean, rulesInput, cleanOptions);
                 if (cleanResult.domain) {
                     stats.recognizedDomains++;
                     const finalDomain = cleanResult.domain;
@@ -338,7 +422,7 @@
 
             const matches = collectMatches(clean);
             if (matches.length === 0) {
-                const cleanResult = cleanDomainCandidate(clean, rulesInput);
+                const cleanResult = cleanStructuredTxtCandidate(clean, rulesInput, cleanOptions);
                 stats.invalidLines++;
                 if (lineLooksLiteral) {
                     stats.recognizedDomains++;
@@ -351,7 +435,7 @@
             let lineProducedDomain = false;
             matches.forEach(match => {
                 stats.recognizedDomains++;
-                const cleanResult = cleanDomainCandidate(match.candidate, rulesInput);
+                const cleanResult = cleanDomainCandidate(match.candidate, rulesInput, cleanOptions);
                 if (!cleanResult.domain) {
                     stats.invalidLines++;
                     stats.invalidCandidates++;
@@ -437,6 +521,12 @@
             if (!clean) {
                 stats.emptyLines++;
                 addRemoved(lineNum, line, commentText ? 'Comentário removido' : 'Linha vazia');
+                return;
+            }
+
+            if (looksLikeDigitalSignatureLine(clean)) {
+                stats.emptyLines++;
+                addRemoved(lineNum, line, 'Linha de assinatura digital ignorada');
                 return;
             }
 

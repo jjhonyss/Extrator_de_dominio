@@ -6,6 +6,7 @@
             files: [], // { name, status, rawText, extractedDomains, stats, ... }
             domains: {}, // { 'domain.com': { count, source, manual, isWhitelisted, whitelistReason } }
             manuallyDeletedDomains: new Set(),
+            forcedBlocklistDomains: new Set(),
             reviewItems: [],
             auditItems: [],
             invalidSearchQuery: '',
@@ -53,6 +54,8 @@
         let invalidAuditSequence = 0;
         let nextFileSequence = 0;
         let reviewIndexByKey = new Map();
+        let fileListRenderFrame = null;
+        let pendingFileListMetricsRefresh = false;
 
         // Elementos DOM
         const dropzone = document.getElementById('dropzone');
@@ -72,6 +75,18 @@
         const invalidTableBody = document.getElementById('invalidTableBody');
         const invalidPaginationContainer = document.getElementById('invalidPaginationContainer');
         const invalidTotalCount = document.getElementById('invalidTotalCount');
+        const tableHeaderRow = document.getElementById('tableHeaderRow');
+        const paginationContainer = document.getElementById('paginationContainer');
+        const badgeBlocklistCount = document.getElementById('badgeBlocklistCount');
+        const badgeWhitelistCount = document.getElementById('badgeWhitelistCount');
+        const badgeInvalidCount = document.getElementById('badgeInvalidCount');
+        const tabBlocklistBtn = document.getElementById('tabBlocklistBtn');
+        const tabWhitelistBtn = document.getElementById('tabWhitelistBtn');
+        const tabInvalidBtn = document.getElementById('tabInvalidBtn');
+        const tabCompareBtn = document.getElementById('tabCompareBtn');
+        const blocklistWhitelistContent = document.getElementById('blocklistWhitelistContent');
+        const invalidTabContent = document.getElementById('invalidTabContent');
+        const compareTabContent = document.getElementById('compareTabContent');
 
         // Elementos DOM Comparador
         const dropzoneA = document.getElementById('dropzoneA');
@@ -432,6 +447,13 @@
             cleanDomain = cleanDomain.replace(/^https?:\/\//, '');
             cleanDomain = cleanDomain.split(/[\/\?#:]/)[0];
 
+            if (state.forcedBlocklistDomains.has(cleanDomain)) return null;
+
+            const withoutWwwForced = cleanDomain.startsWith('www.')
+                ? cleanDomain.substring(4)
+                : cleanDomain;
+            if (state.forcedBlocklistDomains.has(withoutWwwForced)) return null;
+
             // 1. Verificação manual: primeiro testa o domínio exato, depois sem www.
             if (state.whitelist.has(cleanDomain)) return 'Manual';
             // Também testa sem www. para capturar entradas de whitelist sem prefixo
@@ -542,6 +564,88 @@
             return state.files.find(file => file.id === fileId) || null;
         }
 
+        function resetFileSummaryMetrics(fileObj) {
+            if (!fileObj) return;
+            fileObj.whitelistCount = 0;
+            fileObj.pendingReviewCount = 0;
+            fileObj.auditCount = 0;
+            fileObj.blocklistCount = 0;
+            fileObj.approvedReviewDomains = new Set();
+            fileObj.extractedDomainLookup = new Set();
+        }
+
+        function recomputeAllFileSummaryMetrics() {
+            const filesBySource = new Map();
+
+            state.files.forEach(file => {
+                resetFileSummaryMetrics(file);
+                if (file?.name) {
+                    filesBySource.set(file.name, file);
+                }
+
+                if (file.status === 'success' && Array.isArray(file.extractedDomains)) {
+                    let whitelistCount = 0;
+                    let blocklistCount = 0;
+                    const extractedDomainLookup = new Set();
+                    file.extractedDomains.forEach(domainName => {
+                        extractedDomainLookup.add(domainName);
+                        if (isWhitelisted(domainName)) {
+                            whitelistCount++;
+                        } else {
+                            blocklistCount++;
+                        }
+                    });
+                    file.whitelistCount = whitelistCount;
+                    file.blocklistCount = blocklistCount;
+                    file.extractedDomainLookup = extractedDomainLookup;
+                }
+            });
+
+            state.reviewItems.forEach(item => {
+                const fileObj = filesBySource.get(item.source);
+                if (!fileObj) return;
+
+                const occurrences = Number(item.occurrences || 1);
+                if (item.reviewStatus === 'pending') {
+                    fileObj.pendingReviewCount += occurrences;
+                    return;
+                }
+
+                if (item.reviewStatus === 'approved' && item.suggestedDomain) {
+                    const approvedDomain = item.suggestedDomain.trim().toLowerCase();
+                    if (
+                        state.domains[approvedDomain] &&
+                        !state.domains[approvedDomain].isWhitelisted &&
+                        !fileObj.extractedDomainLookup.has(approvedDomain)
+                    ) {
+                        fileObj.approvedReviewDomains.add(approvedDomain);
+                    }
+                }
+            });
+
+            state.files.forEach(file => {
+                file.blocklistCount += file.approvedReviewDomains.size;
+            });
+
+            state.auditItems.forEach(item => {
+                const fileObj = filesBySource.get(item.source);
+                if (!fileObj) return;
+                fileObj.auditCount += Number(item.occurrences || 1);
+            });
+        }
+
+        function scheduleFileListRender({ recomputeMetrics = true } = {}) {
+            pendingFileListMetricsRefresh = pendingFileListMetricsRefresh || recomputeMetrics;
+            if (fileListRenderFrame !== null) return;
+
+            fileListRenderFrame = window.requestAnimationFrame(() => {
+                const shouldRecomputeMetrics = pendingFileListMetricsRefresh;
+                fileListRenderFrame = null;
+                pendingFileListMetricsRefresh = false;
+                renderFileList({ recomputeMetrics: shouldRecomputeMetrics });
+            });
+        }
+
         // Reseta o estado da paginação
         function resetPagination() {
             state.pagination.blocklist.currentPage = 1;
@@ -564,6 +668,7 @@
                 'Linha vazia',
                 'Comentário removido',
                 'Falha OCR',
+                'Linha de assinatura digital ignorada',
                 'Identificador processual/judicial descartado',
                 'E-mail descartado pelas regras',
                 'IP local/loopback ignorado',
@@ -588,11 +693,11 @@
         }
 
         function getReviewContext(item) {
+            if (item.reviewStatus === 'approved') return 'approved';
+            if (item.reviewStatus === 'dismissed') return 'dismissed';
             if (item.reviewType === 'duplicate_in_file' || String(item.reason || '').startsWith('Duplicado:')) {
                 return 'duplicate';
             }
-            if (item.reviewStatus === 'approved') return 'approved';
-            if (item.reviewStatus === 'dismissed') return 'dismissed';
             if (item.suggestedDomain) return 'suggested';
             return 'audit';
         }
@@ -606,23 +711,26 @@
             return 'Auditoria';
         }
 
+        function updateTabBadges(totalBlocklistCount, totalWhitelistCount, pendingReviewCount) {
+            if (badgeBlocklistCount) badgeBlocklistCount.innerText = totalBlocklistCount;
+            if (badgeWhitelistCount) badgeWhitelistCount.innerText = totalWhitelistCount;
+            if (badgeInvalidCount) badgeInvalidCount.innerText = pendingReviewCount;
+        }
+
         function buildFileStatsSummary(fileObj) {
             const stats = fileObj?.stats;
             if (!stats) return null;
-
-            const extractedDomains = Array.isArray(fileObj.extractedDomains) ? fileObj.extractedDomains : [];
-            let whitelistCount = 0;
-            extractedDomains.forEach(domainName => {
-                if (isWhitelisted(domainName)) {
-                    whitelistCount++;
-                }
-            });
+            const whitelistCount = Number(fileObj.whitelistCount || 0);
+            const reviewCount = Number(fileObj.pendingReviewCount || 0);
+            const auditCount = Number(fileObj.auditCount || 0);
+            const blocklistCount = Number(fileObj.blocklistCount || 0);
 
             return {
                 recognizedDomains: stats.recognizedDomains || 0,
                 whitelist: whitelistCount,
-                review: (stats.duplicates || 0) + (stats.invalidCandidates || 0),
-                blocklist: Math.max(0, (stats.validDomains || 0) - whitelistCount)
+                review: reviewCount,
+                audit: auditCount,
+                blocklist: Math.max(0, blocklistCount)
             };
         }
 
@@ -693,6 +801,7 @@
                 whitelistInput.value = '';
                 renderWhitelist();
                 updateAllDomainsWhitelistStatus();
+                renderFileList();
                 resetPagination();
                 renderTable();
                 refreshComparisonIfReady();
@@ -721,6 +830,7 @@
             state.whitelist.delete(item);
             renderWhitelist();
             updateAllDomainsWhitelistStatus();
+            renderFileList();
             resetPagination();
             renderTable();
             refreshComparisonIfReady();
@@ -761,11 +871,15 @@
                     statusMessage: 'Lendo...',
                     rawText: '', // Salvaremos o texto bruto para permitir re-processamento com regras diferentes
                     auditEvents: [],
-                    extractedDomains: []
+                    extractedDomains: [],
+                    whitelistCount: 0,
+                    pendingReviewCount: 0,
+                    auditCount: 0,
+                    approvedReviewDomains: new Set()
                 };
                 
                 state.files.push(fileObj);
-                renderFileList();
+                scheduleFileListRender({ recomputeMetrics: false });
                 updateStats();
 
                 // Ler o arquivo
@@ -777,7 +891,7 @@
                             const typedArray = new Uint8Array(this.result);
                             text = await extractTextFromPdf(typedArray, fileObj, (progMsg) => {
                                 fileObj.statusMessage = progMsg;
-                                renderFileList();
+                                scheduleFileListRender({ recomputeMetrics: false });
                             });
                         } else if (isTxt) {
                             text = this.result;
@@ -798,13 +912,13 @@
                         console.error(err);
                         fileObj.status = 'error';
                         fileObj.statusMessage = 'Erro de leitura';
-                        renderFileList();
+                        scheduleFileListRender({ recomputeMetrics: false });
                     }
                 };
                 reader.onerror = function() {
                     fileObj.status = 'error';
                     fileObj.statusMessage = 'Erro de leitura';
-                    renderFileList();
+                    scheduleFileListRender({ recomputeMetrics: false });
                 };
 
                 if (isPdf) {
@@ -816,11 +930,15 @@
         }
 
         // Renderiza lista de arquivos na lateral
-        function renderFileList() {
+        function renderFileList({ recomputeMetrics = true } = {}) {
             fileList.innerHTML = '';
             if (state.files.length === 0) {
                 fileList.innerHTML = '<p style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem 0;">Nenhum arquivo carregado</p>';
                 return;
+            }
+
+            if (recomputeMetrics) {
+                recomputeAllFileSummaryMetrics();
             }
 
             state.files.forEach((file, index) => {
@@ -849,7 +967,7 @@
                     statsHtml = `
                         <div style="font-size: 0.65rem; color: var(--text-muted); padding-left: 1.25rem; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 0.35rem; display: flex; flex-direction: column; gap: 0.15rem;">
                             <div>Lidos: <b>${summary?.recognizedDomains ?? 0}</b> | Whitelist: ${summary?.whitelist ?? 0}</div>
-                            <div>Revisão: ${summary?.review ?? 0} | Bloqueio: ${summary?.blocklist ?? 0}</div>
+                            <div>Revisão: ${summary?.review ?? 0} | Auditoria: ${summary?.audit ?? 0} | Bloqueio: ${summary?.blocklist ?? 0}</div>
                         </div>
                     `;
                 }
@@ -962,6 +1080,7 @@
 
             rebuildConsolidatedDomainsFromFiles();
             resetPagination();
+            renderFileList();
             renderTable();
             renderInvalidTable();
             updateStats();
@@ -1021,37 +1140,29 @@
             if (state.activeTab === tabName) return;
             state.activeTab = tabName;
             
-            document.getElementById('tabBlocklistBtn').classList.toggle('active', tabName === 'blocklist');
-            document.getElementById('tabWhitelistBtn').classList.toggle('active', tabName === 'whitelist');
-            document.getElementById('tabInvalidBtn').classList.toggle('active', tabName === 'invalid');
-            document.getElementById('tabCompareBtn').classList.toggle('active', tabName === 'compare');
-            
-            const mainContent = document.getElementById('blocklistWhitelistContent');
-            const invalidContent = document.getElementById('invalidTabContent');
-            const compareContent = document.getElementById('compareTabContent');
-            
-            const btnAddDomain = document.getElementById('btnAddDomain');
-            const btnExportWhitelist = document.getElementById('btnExportWhitelist');
-            const btnExport = document.getElementById('btnExport');
+            tabBlocklistBtn.classList.toggle('active', tabName === 'blocklist');
+            tabWhitelistBtn.classList.toggle('active', tabName === 'whitelist');
+            tabInvalidBtn.classList.toggle('active', tabName === 'invalid');
+            tabCompareBtn.classList.toggle('active', tabName === 'compare');
             
             if (tabName === 'compare') {
-                mainContent.style.display = 'none';
-                invalidContent.style.display = 'none';
-                compareContent.style.display = 'flex';
+                blocklistWhitelistContent.style.display = 'none';
+                invalidTabContent.style.display = 'none';
+                compareTabContent.style.display = 'flex';
                 
                 // Redesenha tabela do comparador
                 renderCompareTable();
                 updateCompareStats();
             } else if (tabName === 'invalid') {
-                mainContent.style.display = 'none';
-                invalidContent.style.display = 'flex';
-                compareContent.style.display = 'none';
+                blocklistWhitelistContent.style.display = 'none';
+                invalidTabContent.style.display = 'flex';
+                compareTabContent.style.display = 'none';
 
                 renderInvalidTable();
             } else {
-                mainContent.style.display = 'flex';
-                invalidContent.style.display = 'none';
-                compareContent.style.display = 'none';
+                blocklistWhitelistContent.style.display = 'flex';
+                invalidTabContent.style.display = 'none';
+                compareTabContent.style.display = 'none';
                 
                 if (tabName === 'blocklist') {
                     btnAddDomain.style.display = 'flex';
@@ -1069,22 +1180,32 @@
 
         // Renderiza a tabela de Domínios
         function renderTable() {
-            const tableHeaderRow = document.getElementById('tableHeaderRow');
-            const domainTableBody = document.getElementById('domainTableBody');
-            const paginationContainer = document.getElementById('paginationContainer');
-            
             domainTableBody.innerHTML = '';
             
-            // 1. Mapeia domínios para formato de lista
-            const domainList = Object.keys(state.domains).map(d => ({
-                domain: d,
-                ...state.domains[d]
-            }));
+            // 1. Mapeia domínios para formato de lista em uma única passada
+            const domainList = [];
+            let totalBlocklistCount = 0;
+            let totalWhitelistCount = 0;
+
+            Object.keys(state.domains).forEach(domainName => {
+                const item = state.domains[domainName];
+                const entry = {
+                    domain: domainName,
+                    ...item
+                };
+
+                domainList.push(entry);
+                if (item.isWhitelisted) {
+                    totalWhitelistCount++;
+                } else {
+                    totalBlocklistCount++;
+                }
+            });
+
+            const pendingReviewCount = state.reviewItems.filter(item => item.reviewStatus === 'pending').length;
+            updateTabBadges(totalBlocklistCount, totalWhitelistCount, pendingReviewCount);
 
             if (state.activeTab !== 'blocklist' && state.activeTab !== 'whitelist') {
-                document.getElementById('badgeBlocklistCount').innerText = domainList.filter(item => !item.isWhitelisted).length;
-                document.getElementById('badgeWhitelistCount').innerText = domainList.filter(item => item.isWhitelisted).length;
-                document.getElementById('badgeInvalidCount').innerText = state.reviewItems.filter(item => item.reviewStatus === 'pending').length;
                 return;
             }
 
@@ -1111,12 +1232,6 @@
                     <th style="width: 20%; text-align: center;">Ações</th>
                 `;
             }
-
-            // 4. Atualiza os contadores das abas
-            const totalBlocklistCount = domainList.filter(item => !item.isWhitelisted).length;
-            const totalWhitelistCount = domainList.filter(item => item.isWhitelisted).length;
-            document.getElementById('badgeBlocklistCount').innerText = totalBlocklistCount;
-            document.getElementById('badgeWhitelistCount').innerText = totalWhitelistCount;
 
             // 5. Ordena a lista
             if (state.activeTab === 'blocklist') {
@@ -1166,6 +1281,7 @@
             const startIndex = (pag.currentPage - 1) * pag.pageSize;
             const endIndex = Math.min(startIndex + pag.pageSize, totalItems);
             const paginatedItems = filteredList.slice(startIndex, endIndex);
+            const fragment = document.createDocumentFragment();
 
             // 8. Renderiza linhas paginadas
             paginatedItems.forEach(item => {
@@ -1246,8 +1362,10 @@
                         </td>
                     `;
                 }
-                domainTableBody.appendChild(tr);
+                fragment.appendChild(tr);
             });
+
+            domainTableBody.appendChild(fragment);
 
             // 9. Renderiza a Paginação
             renderPaginationControls(totalPages, pag.currentPage, totalItems, startIndex + 1, endIndex);
@@ -1284,7 +1402,11 @@
             if (invalidTotalCount) {
                 invalidTotalCount.innerText = pendingReviewCount;
             }
-            document.getElementById('badgeInvalidCount').innerText = pendingReviewCount;
+            updateTabBadges(
+                badgeBlocklistCount ? Number(badgeBlocklistCount.innerText || 0) : 0,
+                badgeWhitelistCount ? Number(badgeWhitelistCount.innerText || 0) : 0,
+                pendingReviewCount
+            );
 
             if (filteredList.length === 0) {
                 invalidTableBody.innerHTML = `
@@ -1312,6 +1434,7 @@
             const startIndex = (pag.currentPage - 1) * pag.pageSize;
             const endIndex = Math.min(startIndex + pag.pageSize, totalItems);
             const paginatedItems = filteredList.slice(startIndex, endIndex);
+            const fragment = document.createDocumentFragment();
 
             paginatedItems.forEach(item => {
                 const tr = document.createElement('tr');
@@ -1366,8 +1489,10 @@
                         </div>
                     </td>
                 `;
-                invalidTableBody.appendChild(tr);
+                fragment.appendChild(tr);
             });
+
+            invalidTableBody.appendChild(fragment);
 
             renderInvalidPaginationControls(totalPages, pag.currentPage, totalItems, startIndex + 1, endIndex);
         }
@@ -1532,20 +1657,27 @@
             delete state.domains[oldDomain];
             state.manuallyDeletedDomains.add(oldDomain);
             state.manuallyDeletedDomains.delete(newDomain);
+            if (state.forcedBlocklistDomains.has(oldDomain)) {
+                state.forcedBlocklistDomains.delete(oldDomain);
+                state.forcedBlocklistDomains.add(newDomain);
+            }
             state.domains[newDomain] = oldData;
             
             updateDomainWhitelistStatus(newDomain);
 
+            renderFileList();
             renderTable();
             updateStats();
         };
 
         // Adiciona um domínio diretamente à Whitelist a partir da linha correspondente
         window.whitelistDirectly = function(domain) {
+            state.forcedBlocklistDomains.delete(domain);
             state.whitelist.add(domain);
             renderWhitelist();
             updateAllDomainsWhitelistStatus();
             resetPagination();
+            renderFileList();
             renderTable();
             refreshComparisonIfReady();
             updateStats();
@@ -1557,6 +1689,7 @@
             renderWhitelist();
             updateAllDomainsWhitelistStatus();
             resetPagination();
+            renderFileList();
             renderTable();
             refreshComparisonIfReady();
             updateStats();
@@ -1565,7 +1698,9 @@
         // Exclui um domínio da listagem
         window.deleteDomain = function(domain) {
             state.manuallyDeletedDomains.add(domain);
+            state.forcedBlocklistDomains.delete(domain);
             delete state.domains[domain];
+            renderFileList();
             renderTable();
             updateStats();
         };
@@ -1574,15 +1709,25 @@
             const item = state.reviewItems.find(entry => entry.id === itemId);
             if (!item || !item.suggestedDomain || item.reviewStatus !== 'pending') return;
 
-            state.manuallyDeletedDomains.delete(item.suggestedDomain);
-            if (!state.domains[item.suggestedDomain]) {
-                addDomainToConsolidatedBlocklist(item.suggestedDomain, `Revisão: ${item.source}`, { manual: true });
+            const approvedDomain = item.suggestedDomain.trim().toLowerCase();
+            state.manuallyDeletedDomains.delete(approvedDomain);
+            state.forcedBlocklistDomains.add(approvedDomain);
+
+            if (!state.domains[approvedDomain]) {
+                addDomainToConsolidatedBlocklist(approvedDomain, `Revisão: ${item.source}`, { manual: true });
+            } else {
+                state.domains[approvedDomain].manual = true;
+                state.domains[approvedDomain].source = `Revisão: ${item.source}`;
+                updateDomainWhitelistStatus(approvedDomain);
             }
+
             item.reviewStatus = 'approved';
 
             resetPagination();
+            renderFileList();
             renderTable();
             renderInvalidTable();
+            refreshComparisonIfReady();
             updateStats();
         };
 
@@ -1591,7 +1736,9 @@
             if (!item || item.reviewStatus !== 'pending') return;
 
             item.reviewStatus = 'dismissed';
+            renderFileList();
             renderInvalidTable();
+            refreshComparisonIfReady();
             updateStats();
         };
 
@@ -1662,6 +1809,7 @@
                 state.files = [];
                 state.domains = {};
                 state.manuallyDeletedDomains = new Set();
+                state.forcedBlocklistDomains = new Set();
                 state.reviewItems = [];
                 state.auditItems = [];
                 resetReviewIndex();
